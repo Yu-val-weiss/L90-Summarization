@@ -4,7 +4,7 @@ import json
 import tqdm
 
 args = argparse.ArgumentParser()
-args.add_argument('--pred_data', type=str, default='data/validation.json')
+args.add_argument('--pred_data', type=str, default='prediction_file.json')
 args.add_argument('--eval_data', type=str, default='data/validation.json')
 args = args.parse_args()
 
