@@ -1,3 +1,4 @@
+from random import shuffle
 from typing import Dict, List, Set, Tuple
 import numpy as np
 import numpy.typing as npt
@@ -7,6 +8,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, wait
 import json
 from datetime import datetime
+from evaluation.rouge_evaluator import RougeEvaluator
 
 LEAD_TRAIL_PUNC_REGEX = r"^[^\w\s]+|[^\w\s]+$"
 
@@ -16,7 +18,6 @@ class ExtractiveSummarizer:
         if not skip_vectors:
             self.word_index, self.vectors = self._load_vectors(less_vectors=less_vectors)
         self.inv_doc_frq: Dict[str, float] = {}
-        self.weights = np.empty(0)
         self.force_idf = force_idf
     
     @staticmethod
@@ -75,20 +76,19 @@ class ExtractiveSummarizer:
         word_counts = Counter(word for sentence in cleaned_article for word in sentence)
         max_count = max(word_counts.values())
         
-        def calculate_idf(words):
-            return np.array([self.inv_doc_frq[word] if word in self.inv_doc_frq else 0 for word in words])
-
-        def calculate_tf(words):
-            return np.array([0.5 + 0.5 * (word_counts[word.lower()] / max_count) for word in words])
+        idf, tf, tfidf = [], [], []
         
-        # Calculate IDF and TF for each sentence in the article
-        per_sent_idf = np.array([np.max(calculate_idf(sentence)) if sentence != [] else 0 for sentence in cleaned_article])
-        per_sent_tf = np.array([np.max(calculate_tf(sentence)) if sentence != [] else 0 for sentence in cleaned_article])
+        for sent in cleaned_article:
+            if sent == []:
+                idf.append(0)
+                tf.append(0)
+                tfidf.append(0)
+                continue
+            idf.append(sent_tf := np.array([self.inv_doc_frq[word] if word in self.inv_doc_frq else 0 for word in sent]))
+            tf.append(sent_idf := np.array([0.5 + 0.5 * (word_counts[word.lower()] / max_count) for word in sent]))
+            tfidf.append(sent_tf * sent_idf)
         
-        # Calculate TF-IDF
-        per_sent_tfidf = per_sent_idf * per_sent_tf
-        
-        return per_sent_idf, per_sent_tf, per_sent_tfidf
+        return [np.max(i) for i in idf], [np.max(i) for i in tf], [np.max(i) for i in tfidf]
 
     
     def _init_idf(self, X: List[List[str]]):
@@ -177,33 +177,10 @@ class ExtractiveSummarizer:
         
         
     def _embed_article(self, article: List[str]):
-        # try:
-        #     sentences = np.array([self._embed_sentence(sent) for sent in article if sent != ''])
-        #     print(f"sent shape: {sentences.shape}")
-        #     mean: npt.NDArray = np.mean(sentences, axis=0)
-        #     print(f"Embedded article! Shape: {mean.shape}")
-        #     return mean
-        # except Exception as e:
-        #     print(f"Oops: {e}")
-        #     print(article)
-        #     return np.zeros(300)
-        # PROPER
         x = [emb for sent in article if (emb := self._embed_sentence(sent)).shape == (300,)]
         if len(x) == 0:
             print(article)
         return np.mean(x, axis=0)
-        
-        # sentences = []
-        # for sent in article:
-        #     if sent == '':
-        #         continue
-        #     try:
-        #         sentences.append(emb := self._embed_sentence(sent))
-        #         print(f"appended w shape {emb.shape} for sent {sent}")
-        #     except Exception as e:
-        #         print(f"OOps: {e}")
-        #         print(f"Sent: {sent}")
-        # return np.mean(np.array(sentences), axis=0)
             
         
     
@@ -239,8 +216,10 @@ class ExtractiveSummarizer:
         embedded_article = self._embed_article(article)
         cosines = np.array([self._cosine_distance(emb, embedded_article) if (emb := self._embed_sentence(sent)).shape == (300,) else -1.0 for sent in article])
         tf, idf, tfidf = self._make_tf_idf_tfidf(article)
-        position = np.arange(1, len(article) + 1)
-        return np.column_stack((cosines, tf, idf, tfidf, position))
+        # position = np.arange(1, len(article) + 1)
+        # return np.column_stack((cosines, tf, idf, tfidf, position / np.linalg.norm(position)))
+        return np.column_stack((cosines, tf, idf, tfidf))
+        # return np.column_stack((cosines, tf, idf))
     
     
     def calculate_derivatives_for_batch(self, weights, bias, feat_batch, y_batch):
@@ -262,13 +241,13 @@ class ExtractiveSummarizer:
             
             # print(f"diff: {diff}")
             
-            avg_deriv = np.mean(diff)
+            max_deriv = np.max(diff)
             
             # print(f"avg_deriv: {avg_deriv}")
-            w_diff = avg_deriv * np.mean(features, axis=0)
+            w_diff = max_deriv * np.amax(features, axis=0)
             # print(f"w_diff: {w_diff}")
             w_deriv += w_diff
-            b_deriv += avg_deriv
+            b_deriv += max_deriv
             
         return w_deriv, b_deriv
     
@@ -289,45 +268,93 @@ class ExtractiveSummarizer:
         
         all_features = [self.create_feature_for_article(article) for article in tqdm(X, desc="Preparing features")]
             
-
         # now can perform training
-        EPOCHS = 500
-        LEARNING_RATE = 0.005
-        FEATURE_COUNT = 5
-        
-        # NUM_THREADS = 2
-        
-        # seg_size = len(y) // NUM_THREADS
-        
-            
-            
+        EPOCHS = 1000
+        LEARNING_RATE = 0.001
+        FEATURE_COUNT = 4
+        BATCH_SIZE = 100
+        EARLY_STOP = 2
+        LAMBDA = 0.8
         
         weights: npt.NDArray[np.float64] = np.random.uniform(0, 1, FEATURE_COUNT)
         bias: np.float64 = np.float64(0.0)
+        
+        evaluator = RougeEvaluator()
+        
+        best_p, best_r, best_f = 0.0, 0.0, 0.0
+        early_stop_p, early_stop_r, early_stop_f = 0, 0, 0
+        
         for epoch in tqdm(range(EPOCHS), desc="Descending gradients"):
             w_deriv: npt.NDArray = np.zeros(FEATURE_COUNT)
             b_deriv = np.float64(0)
-            for features, gold_y in zip(all_features, y): # iterating per article here, use average loss in the article
-                raw = features.dot(weights) + bias
-                norm = self.sigmoid(raw)
             
-                # cross entropy loss derivatives:s
-                # ∂L/∂w = [σ(z) - y] * x
-                # ∂L/∂b = [σ(z) - y]
+            # Shuffle the data and labels to create random mini-batches
+            combined_data = list(zip(all_features, y))
+            shuffle(combined_data)
+            all_features, y = zip(*combined_data)
+            
+            for i in range(0, len(all_features), BATCH_SIZE):
+                batch_features = all_features[i:i + BATCH_SIZE]
+                batch_labels = y[i:i + BATCH_SIZE]
                 
-                diff = norm - gold_y
-                
-                avg_deriv = np.mean(diff)
-                
-                w_diff = avg_deriv * np.mean(features, axis=0)
+                for features, gold_y in zip(batch_features, batch_labels):
+                    raw = features.dot(weights) + bias
+                    norm = self.sigmoid(raw)
+                    diff = norm - gold_y
+                    avg_deriv = np.amax(diff)
+                    w_diff = avg_deriv * np.amax(features, axis=0)
+                    w_deriv += w_diff
+                    b_deriv += avg_deriv
 
-                w_deriv += w_diff
-                b_deriv += avg_deriv
+                # update weights and bias for mini-batch
+                weights -= (w_deriv - LAMBDA * weights) * LEARNING_RATE / BATCH_SIZE
+                bias -= (b_deriv - LAMBDA * bias) * LEARNING_RATE / BATCH_SIZE
                 
-            
-            # learn
-            weights -= w_deriv * LEARNING_RATE
-            bias -= b_deriv * LEARNING_RATE
+                
+            # check for early stop using very_small_validation, every N epochs
+            if EARLY_STOP > 0 and epoch != 0 and epoch % 100 == 0:
+                with open('data/very_small_validation.json', 'r') as f:
+                    eval_data = json.load(f)
+                    
+
+                eval_articles = [article['article'] for article in eval_data]
+                preprocessed_eval_articles = self.preprocess(eval_articles)
+                summaries = self.predict(preprocessed_eval_articles, b=bias, w=weights)
+                    
+                pred_sums = []
+                eval_sums = []
+                for eval, pred in zip(eval_data, summaries):
+                    pred_sums.append(pred)
+                    eval_sums.append(eval['summary'])
+                
+                scores = evaluator.batch_score(pred_sums, eval_sums) 
+                
+                for k, v in scores.items(): # type: ignore
+                    if k == 'rouge-1':
+                        if v["f"] > best_f:
+                            best_f = v["f"]
+                            early_stop_f = 0  # Reset the counter
+                        else:
+                            early_stop_f += 1
+                        if v["p"] > best_p:
+                            best_p = v["p"]
+                            early_stop_p = 0  
+                        else:
+                            early_stop_p += 1
+                        if v["r"] > best_r:
+                            best_r = v["r"]
+                            early_stop_r = 0  
+                        else:
+                            early_stop_r += 1
+                            
+                count = 0
+                for item in (early_stop_r, early_stop_p, early_stop_f):
+                    if item >= EARLY_STOP:
+                        count += 1
+                if count >= 2:
+                    print("STOPPING EARLY")
+                    break 
+        
             
         # write learned results
         self.weights = weights
@@ -348,24 +375,35 @@ class ExtractiveSummarizer:
             "weights": weights.tolist(),
             "bias": bias,
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "tag": "short" if len(X) == 100 else "full"
+            "tag": "short" if len(X) == 100 else "full",
+            "learning_rate": LEARNING_RATE,
+            "epoch": EPOCHS,
+            "feature_count": FEATURE_COUNT,
+            "batch_size": BATCH_SIZE,
+            "early_stop": EARLY_STOP,
+            "lambda": LAMBDA
         })
 
         # Write the updated data back to the file
         with open(file_path, "w") as file:
             json.dump(data, file, indent=4)
 
-    def predict(self, X: List[List[str]], k=3):
+    def predict(self, X: List[List[str]], k=3, b=None, w=None):
         """
         X: list of list of sentences (i.e., comprising an article)
         """
         
         # print(self.create_feature_for_article([" ", "afhash asdf"]))
         
-        for article in tqdm(X, desc="Running extractive summarizer"):
+        bias = b if b is not None else self.bias
+        weights = w if w is not None else self.weights
+        
+        loop = tqdm(X, desc="Running extractive summarizer") if b is None else X
+        
+        for article in loop:
             
             features = self.create_feature_for_article(article)
-            raw = self.bias + features.dot(self.weights)
+            raw = bias + features.dot(weights)
             sentence_scores = self.sigmoid(raw)
             
             # print(sentence_scores)
