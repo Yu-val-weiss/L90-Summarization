@@ -291,7 +291,7 @@ class ExtractiveSummarizer:
             
 
         # now can perform training
-        EPOCHS = 10000
+        EPOCHS = 500
         LEARNING_RATE = 0.005
         FEATURE_COUNT = 5
         
@@ -304,50 +304,23 @@ class ExtractiveSummarizer:
         
         weights: npt.NDArray[np.float64] = np.random.uniform(0, 1, FEATURE_COUNT)
         bias: np.float64 = np.float64(0.0)
-        # with ThreadPoolExecutor() as executor:
-        #     for epoch in tqdm(range(EPOCHS), desc="Descending gradients"):
-                
-        #         partitions = [(all_features[i:i + seg_size], y[i:i+seg_size]) for i in range(0, len(y), seg_size)]
-                
-        #         futures = [executor.submit(self.calculate_derivatives_for_batch, weights, bias, feats, ys) for feats, ys in partitions]
-                
-                
-        #         w_deriv: npt.NDArray = np.zeros(3)
-        #         b_deriv = np.float64(0)
-                
-        #         for future in tqdm(as_completed(futures), desc="Collecting futures", leave=False):
-        #            w_d, b_d = future.result()
-        #            w_deriv += w_d
-        #            b_deriv += b_d
-                
-        #         # learn
-        #         weights -= w_deriv * LEARNING_RATE
-        #         bias -= b_deriv * LEARNING_RATE
-        
         for epoch in tqdm(range(EPOCHS), desc="Descending gradients"):
             w_deriv: npt.NDArray = np.zeros(FEATURE_COUNT)
             b_deriv = np.float64(0)
             for features, gold_y in zip(all_features, y): # iterating per article here, use average loss in the article
                 raw = features.dot(weights) + bias
                 norm = self.sigmoid(raw)
-                
-                # print(f"raw: {raw}")
-                # print(f"norm: {norm}")
             
                 # cross entropy loss derivatives:s
                 # ∂L/∂w = [σ(z) - y] * x
                 # ∂L/∂b = [σ(z) - y]
-                # print(f"gold_y: {gold_y}")
                 
                 diff = norm - gold_y
                 
-                # print(f"diff: {diff}")
-                
                 avg_deriv = np.mean(diff)
                 
-                # print(f"avg_deriv: {avg_deriv}")
                 w_diff = avg_deriv * np.mean(features, axis=0)
-                # print(f"w_diff: {w_diff}")
+
                 w_deriv += w_diff
                 b_deriv += avg_deriv
                 
