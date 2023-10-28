@@ -1,7 +1,7 @@
 from typing import Dict, List, Set, Tuple
 import numpy as np
 import numpy.typing as npt
-import tqdm
+from tqdm import tqdm
 import re
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, wait
@@ -29,7 +29,7 @@ class ExtractiveSummarizer:
             
             SHORT = 1000
 
-            with tqdm.tqdm(total=999994 if not less_vectors else SHORT, desc="Reading embedding vectors") as pbar:
+            with tqdm(total=999994 if not less_vectors else SHORT, desc="Reading embedding vectors") as pbar:
                 for index, line in enumerate(fin):
                     tokens = line.rstrip().split(' ')
                     word = tokens[0]
@@ -94,15 +94,15 @@ class ExtractiveSummarizer:
     def _init_idf(self, X: List[List[str]]):
         clean = [[re.sub(LEAD_TRAIL_PUNC_REGEX,'',word.lower()) for sentence in article for word in sentence.split()] for article in X]
         N = len(X)
-        for article in tqdm.tqdm(clean, desc="Generating idf for articles"):
-            for word in tqdm.tqdm(article, desc="Generating idf for words in article", leave=False):
+        for article in tqdm(clean, desc="Generating idf for articles"):
+            for word in tqdm(article, desc="Generating idf for words in article", leave=False):
                 if word not in self.inv_doc_frq:
                     self.inv_doc_frq[word] = np.log((1+N) / (1 + sum(1 for article in clean if word in article)))
                     
     
     def calculate_idf(self, articles: List[Set[str]], words: List[str], N, id):
         idf_values = {}
-        for word in tqdm.tqdm(words, desc=f"Doing words in group {id}", leave=None): # guaranteed unique due to cleaning
+        for word in tqdm(words, desc=f"Doing words in group {id}", leave=None): # guaranteed unique due to cleaning
             idf = np.log((1 + N) / (1 + sum(1 for a in articles if word in a)))
             idf_values[word] = idf
         return idf_values
@@ -132,10 +132,10 @@ class ExtractiveSummarizer:
                 for word in sentence.split()
                 if (regexed := re.sub(LEAD_TRAIL_PUNC_REGEX, '', word.lower())).strip() # Skip empty words, and clean leading/trailing punctuation
             }
-            for article in tqdm.tqdm(X, desc="Cleaning articles")
+            for article in tqdm(X, desc="Cleaning articles")
         ]
         corpus_words = set()
-        for article in tqdm.tqdm(clean, desc="Finding all unique words"):
+        for article in tqdm(clean, desc="Finding all unique words"):
             corpus_words |= article
         print(f"{(num_words := len(corpus_words))} unique words found")
         
@@ -279,7 +279,7 @@ class ExtractiveSummarizer:
         y: list of yes/no decision for each sentence (as boolean)
         """
 
-        for article, decisions in tqdm.tqdm(zip(X, y), desc="Validating data shape", total=len(X)):
+        for article, decisions in tqdm(zip(X, y), desc="Validating data shape", total=len(X)):
             assert len(article) == len(decisions), "Article and decisions must have the same length"
             
         self._init_idf_parallel(X)
@@ -287,7 +287,7 @@ class ExtractiveSummarizer:
         # prepare features: cosine distance of each sentence to article, tf, idf, tfidf, pos in article
         # these remain constant, only weights will change
         
-        all_features = [self.create_feature_for_article(article) for article in tqdm.tqdm(X, desc="Preparing features")]
+        all_features = [self.create_feature_for_article(article) for article in tqdm(X, desc="Preparing features")]
             
 
         # now can perform training
@@ -305,7 +305,7 @@ class ExtractiveSummarizer:
         weights: npt.NDArray[np.float64] = np.random.uniform(0, 1, FEATURE_COUNT)
         bias: np.float64 = np.float64(0.0)
         # with ThreadPoolExecutor() as executor:
-        #     for epoch in tqdm.tqdm(range(EPOCHS), desc="Descending gradients"):
+        #     for epoch in tqdm(range(EPOCHS), desc="Descending gradients"):
                 
         #         partitions = [(all_features[i:i + seg_size], y[i:i+seg_size]) for i in range(0, len(y), seg_size)]
                 
@@ -315,7 +315,7 @@ class ExtractiveSummarizer:
         #         w_deriv: npt.NDArray = np.zeros(3)
         #         b_deriv = np.float64(0)
                 
-        #         for future in tqdm.tqdm(as_completed(futures), desc="Collecting futures", leave=False):
+        #         for future in tqdm(as_completed(futures), desc="Collecting futures", leave=False):
         #            w_d, b_d = future.result()
         #            w_deriv += w_d
         #            b_deriv += b_d
@@ -324,7 +324,7 @@ class ExtractiveSummarizer:
         #         weights -= w_deriv * LEARNING_RATE
         #         bias -= b_deriv * LEARNING_RATE
         
-        for epoch in tqdm.tqdm(range(EPOCHS), desc="Descending gradients"):
+        for epoch in tqdm(range(EPOCHS), desc="Descending gradients"):
             w_deriv: npt.NDArray = np.zeros(FEATURE_COUNT)
             b_deriv = np.float64(0)
             for features, gold_y in zip(all_features, y): # iterating per article here, use average loss in the article
@@ -389,7 +389,7 @@ class ExtractiveSummarizer:
         
         # print(self.create_feature_for_article([" ", "afhash asdf"]))
         
-        for article in tqdm.tqdm(X, desc="Running extractive summarizer"):
+        for article in tqdm(X, desc="Running extractive summarizer"):
             
             features = self.create_feature_for_article(article)
             raw = self.bias + features.dot(self.weights)
