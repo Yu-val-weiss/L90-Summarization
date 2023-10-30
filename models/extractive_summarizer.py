@@ -88,7 +88,9 @@ class ExtractiveSummarizer:
             tf.append(sent_idf := np.array([0.5 + 0.5 * (word_counts[word.lower()] / max_count) for word in sent]))
             tfidf.append(sent_tf * sent_idf)
         
-        return np.array([np.max(i) for i in idf]), np.array([np.max(i) for i in tf]), np.array([np.max(i) for i in tfidf])
+        return (np.array([np.mean(i[i > 0.1]) if i[i > 0.1].shape != (0,) else 0. for i in idf  ]),
+                np.array([np.mean(i[i > 0.1]) if i[i > 0.1].shape != (0,) else 0. for i in tf   ]),
+                np.array([np.mean(i[i > 0.1]) if i[i > 0.1].shape != (0,) else 0. for i in tfidf]))
 
     
     def _init_idf(self, X: List[List[str]]):
@@ -215,45 +217,16 @@ class ExtractiveSummarizer:
         # idf = self._per_sent_idf(article)
         idf, tf, tfidf = self._make_tf_idf_tfidf(article)
         # lengths = np.array([len(sent) for sent in article])
-        # position = np.arange(1, len(article) + 1)
-        # return np.column_stack((cosines, tf, idf, tfidf, position / np.linalg.norm(position)))
-        return np.column_stack((cosines,
-                                tfidf/ np.linalg.norm(tfidf),
-                                idf / np.linalg.norm(idf),
-                                tf / np.linalg.norm(tf),
-                                # lengths / np.linalg.norm(lengths)
-                                ))
+        position = np.arange(1, len(article) + 1)
+        return np.column_stack((
+            cosines/ np.linalg.norm(cosines),
+            tfidf / np.linalg.norm(tfidf),
+            idf  / np.linalg.norm(idf),
+            tf  / np.linalg.norm(tf),
+            # lengths / np.linalg.norm(lengths),
+            position / np.linalg.norm(position),
+            ))
         # return np.column_stack((cosines, tf, idf))
-    
-    
-    def calculate_derivatives_for_batch(self, weights, bias, feat_batch, y_batch):
-        w_deriv: npt.NDArray = np.random.uniform(low=0, high=1, size=3)
-        b_deriv = np.float64(0)
-        for features, gold_y in zip(feat_batch, y_batch): # iterating per article here, use average loss in the article
-            raw =  features.dot(weights) + bias
-            norm = self.sigmoid(raw)
-            
-            # print(f"raw: {raw}")
-            # print(f"norm: {norm}")
-        
-            # cross entropy loss derivatives:s
-            # ∂L/∂w = [σ(z) - y] * x
-            # ∂L/∂b = [σ(z) - y]
-            # print(f"gold_y: {gold_y}")
-            
-            diff = norm - gold_y
-            
-            # print(f"diff: {diff}")
-            
-            max_deriv = np.max(diff)
-            
-            # print(f"avg_deriv: {avg_deriv}")
-            w_diff = max_deriv * np.amax(features, axis=0)
-            # print(f"w_diff: {w_diff}")
-            w_deriv += w_diff
-            b_deriv += max_deriv
-            
-        return w_deriv, b_deriv
     
     
     def train(self, X: List[List[str]], y: List[List[bool]]):
@@ -275,48 +248,51 @@ class ExtractiveSummarizer:
         EPOCHS = 12
         LEARNING_RATE = 0.001
         NUM_FEATURES = all_features[0].shape[1]
-        BATCH_SIZE = len(y)
-        EARLY_STOP = 0
-        LAMBDA = 0
-        MAX_GRADIENT_NORM = 1.0
+        BATCH_SIZE = 64
+        EARLY_STOP = 2
+        LAMBDA = .8
+        MAX_GRADIENT_NORM = 1.
         
-        weights: npt.NDArray[np.float64] = np.random.uniform(0, 1, NUM_FEATURES)
+        weights: npt.NDArray[np.float64] = np.random.uniform(-0.5, 0.5, NUM_FEATURES)
         bias: np.float64 = np.float64(0.0)
         
         evaluator = RougeEvaluator()
         
-        best_p, best_r, best_f = 0.0, 0.0, 0.0
-        early_stop_p, early_stop_r, early_stop_f = 0, 0, 0
+        best_f = 0.0
+        early_stop = 0
         
         for epoch in tqdm(range(EPOCHS), desc="Descending gradients"):
-            w_deriv: npt.NDArray = np.zeros(NUM_FEATURES)
-            b_deriv = np.float64(0)
             
             # Shuffle the data and labels to create random mini-batches
-            # combined_data = list(zip(all_features, y))
-            # shuffle(combined_data)
-            # all_features, y = zip(*combined_data)
+            combined_data = list(zip(all_features, y))
+            shuffle(combined_data)
+            all_features, y = zip(*combined_data)
             
-            # for i in range(0, len(all_features), BATCH_SIZE):
-            #     batch_features = all_features[i:i + BATCH_SIZE]
-            #     batch_labels = y[i:i + BATCH_SIZE]
+            for i in range(0, len(all_features), BATCH_SIZE):
+                w_deriv: npt.NDArray = np.zeros(NUM_FEATURES)
+                b_deriv = np.float64(0)
                 
-            for features, gold_y in zip(all_features, y):
-                raw = features.dot(weights) + bias
-                norm = self.sigmoid(raw)
-                diff = norm - gold_y
-                b_deriv += (avg_deriv := np.mean(diff))
-                w_deriv += avg_deriv * np.mean(features, axis=0)   
+                batch_features = all_features[i:i + BATCH_SIZE]
+                batch_labels = y[i:i + BATCH_SIZE]
                 
-            # prevent gradient explosion
-            if np.linalg.norm(w_deriv) > MAX_GRADIENT_NORM:
-                w_deriv = (w_deriv / np.linalg.norm(w_deriv)) * MAX_GRADIENT_NORM
-            if abs(b_deriv) > MAX_GRADIENT_NORM:
-                b_deriv = np.sign(b_deriv) * MAX_GRADIENT_NORM
+                for features, gold_y in zip(batch_features, batch_labels):
+                    raw = features.dot(weights) + bias
+                    norm = self.sigmoid(raw)
+                    diff = norm - gold_y
+                    b_deriv += (avg_deriv := np.mean(diff)) 
+                    w_deriv += avg_deriv * np.mean(features, axis=0)   
                 
-            # update weights and bias after epoch
-            weights -= (w_deriv - LAMBDA * weights) * LEARNING_RATE 
-            bias -= (b_deriv - LAMBDA * bias) * LEARNING_RATE # type: ignore
+                # prevent gradient explosion
+                if np.linalg.norm(w_deriv) > MAX_GRADIENT_NORM:
+                    w_deriv = (w_deriv / np.linalg.norm(w_deriv)) * MAX_GRADIENT_NORM
+                if abs(b_deriv) > MAX_GRADIENT_NORM:
+                    b_deriv = np.sign(b_deriv) * MAX_GRADIENT_NORM
+                    
+                # update weights and bias after each mini-batch
+                # using L2 regularisation
+                weights -= (w_deriv + 2 * LAMBDA * weights) * LEARNING_RATE 
+                bias -= (b_deriv + 2 * LAMBDA * bias) * LEARNING_RATE # type: ignore
+                
             
                 
             # check for early stop using very_small_validation, every N epochs
@@ -341,27 +317,13 @@ class ExtractiveSummarizer:
                     if k == 'rouge-1':
                         if v["f"] > best_f:
                             best_f = v["f"]
-                            early_stop_f = 0  # Reset the counter
+                            early_stop = 0  # Reset the counter
                         else:
-                            early_stop_f += 1
-                        if v["p"] > best_p:
-                            best_p = v["p"]
-                            early_stop_p = 0  
-                        else:
-                            early_stop_p += 1
-                        if v["r"] > best_r:
-                            best_r = v["r"]
-                            early_stop_r = 0  
-                        else:
-                            early_stop_r += 1
+                            early_stop += 1
                             
-                count = 0
-                for item in (early_stop_r, early_stop_p, early_stop_f):
-                    if item >= EARLY_STOP:
-                        count += 1
-                if count >= 2:
-                    print("STOPPING EARLY")
-                    break 
+                if early_stop >= EARLY_STOP:
+                    print("Early stopping!")
+                    break
         
             
         # write learned results
@@ -421,7 +383,7 @@ class ExtractiveSummarizer:
             # print(sentence_scores)
             top_k_idxs = sorted(range(len(sentence_scores)), key=lambda i: sentence_scores[i], reverse=True)
             # print(top_k_idxs) 
-            top_sentences = [article[i] for i in top_k_idxs if article[i].strip()][:k]
+            top_sentences = [article[i] for i in top_k_idxs if re.sub(LEAD_TRAIL_PUNC_REGEX, '', article[i]).strip()][:k]
             summary = ' . '.join(top_sentences)
             
             yield summary

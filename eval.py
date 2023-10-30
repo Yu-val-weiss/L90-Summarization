@@ -26,8 +26,28 @@ for eval, pred in tqdm.tqdm(zip(eval_data, pred_data), total=len(eval_data)):
 
 scores = evaluator.batch_score(pred_sums, eval_sums)
 
+file_path = "models/weights.json"
+try:
+    with open(file_path, "r") as file:
+        data = json.load(file)
+except Exception:
+    data = {"models": []}
+
+d = {}
+
 for k, v in scores.items():
     print(k)
+    d[k] = {
+        "precision": v["p"],
+        "recall": v["r"],
+        "f1": v["f"]
+    }
     print("\tPrecision:\t", v["p"])
     print("\tRecall:\t\t", v["r"])
     print("\tF1:\t\t", v["f"])
+   
+data["models"][-1]["scores"] = d 
+
+# Write the updated data back to the file
+with open(file_path, "w") as file:
+    json.dump(data, file, indent=4)
