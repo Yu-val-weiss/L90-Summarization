@@ -208,6 +208,10 @@ class ExtractiveSummarizer:
     def sigmoid_prime(z):
         return ExtractiveSummarizer.sigmoid(z) * (1-ExtractiveSummarizer.sigmoid(z))
     
+    @staticmethod
+    def lr_decay(initial_lr, decay_rate, epoch):
+        return initial_lr/(1+decay_rate*epoch)
+    
     
     def create_feature_for_article(self, article: List[str]):
         embedded_article = self._embed_article(article)
@@ -246,7 +250,8 @@ class ExtractiveSummarizer:
             
         # now can perform training
         EPOCHS = 12
-        LEARNING_RATE = 0.001
+        LEARNING_RATE = .001
+        LR_DECAY = 0
         NUM_FEATURES = all_features[0].shape[1]
         BATCH_SIZE = 64
         EARLY_STOP = 2
@@ -261,7 +266,11 @@ class ExtractiveSummarizer:
         best_f = 0.0
         early_stop = 0
         
-        for epoch in tqdm(range(EPOCHS), desc="Descending gradients"):
+        lp = tqdm(range(EPOCHS), desc="Descending gradients")
+        
+        for epoch in lp:
+            lr = self.lr_decay(LEARNING_RATE, LR_DECAY, epoch)
+            lp.set_postfix({"lr": lr})
             
             # Shuffle the data and labels to create random mini-batches
             combined_data = list(zip(all_features, y))
@@ -290,8 +299,8 @@ class ExtractiveSummarizer:
                     
                 # update weights and bias after each mini-batch
                 # using L2 regularisation
-                weights -= (w_deriv + 2 * LAMBDA * weights) * LEARNING_RATE 
-                bias -= (b_deriv + 2 * LAMBDA * bias) * LEARNING_RATE # type: ignore
+                weights -= (w_deriv + 2 * LAMBDA * weights) * lr 
+                bias -= (b_deriv + 2 * LAMBDA * bias) * lr # type: ignore
                 
             
                 
@@ -346,7 +355,8 @@ class ExtractiveSummarizer:
             "bias": bias,
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "tag": "short" if len(X) == 100 else "full",
-            "learning_rate": LEARNING_RATE,
+            "init_learning_rate": LEARNING_RATE,
+            "lr_decay": LR_DECAY,
             "epoch": EPOCHS,
             "feature_count": NUM_FEATURES,
             "batch_size": BATCH_SIZE,

@@ -30,7 +30,6 @@ else:
 with open(args.eval_data, 'r') as f:
     eval_data = json.load(f)
 
-
 eval_articles = [article['article'] for article in eval_data]
 preprocessed_eval_articles = model.preprocess(eval_articles)
 summaries = model.predict(preprocessed_eval_articles)

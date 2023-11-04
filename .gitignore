@@ -163,4 +163,3 @@ models/wiki-*
 .vscode/
 .DS_Store
 prediction_file.json
-prediction_file.json

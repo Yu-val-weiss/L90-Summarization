@@ -35,7 +35,7 @@ except Exception:
 
 d = {}
 
-for k, v in scores.items():
+for k, v in scores.items(): # type: ignore
     print(k)
     d[k] = {
         "precision": v["p"],
