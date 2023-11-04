@@ -19,6 +19,7 @@ class ExtractiveSummarizer:
             self.word_index, self.vectors = self._load_vectors(less_vectors=less_vectors)
         self.inv_doc_frq: Dict[str, float] = {}
         self.force_idf = force_idf
+        self.random = np.random.default_rng(seed=42)
     
     @staticmethod
     def _load_vectors(fname="models/wiki-news-300d-1M.vec", less_vectors=False) -> Tuple[Dict[str, int], npt.NDArray[np.float32]]:
@@ -167,7 +168,7 @@ class ExtractiveSummarizer:
     def _embed_sentence(self, sent: str):
         def random_embedding():
             scale = np.sqrt(1 / 300) # dimension size
-            return np.random.uniform(-scale, scale, 300)
+            return self.random.uniform(-scale, scale, 300)
         STOP_WORDS = ['the', 'a', 'an']
         cleaned_sentence = [re.sub(LEAD_TRAIL_PUNC_REGEX,'',word) for word in sent.split() if word.lower() not in STOP_WORDS]
         if cleaned_sentence == []:
@@ -249,16 +250,16 @@ class ExtractiveSummarizer:
         all_features = [self.create_feature_for_article(article) for article in tqdm(X, desc="Preparing features")]
             
         # now can perform training
-        EPOCHS = 12
-        LEARNING_RATE = .001
-        LR_DECAY = 0
+        EPOCHS = 96
+        LEARNING_RATE = .01
+        LR_DECAY = .01
         NUM_FEATURES = all_features[0].shape[1]
         BATCH_SIZE = 64
-        EARLY_STOP = 2
-        LAMBDA = .8
+        EARLY_STOP = 5
+        LAMBDA = .6
         MAX_GRADIENT_NORM = 1.
         
-        weights: npt.NDArray[np.float64] = np.random.uniform(-0.5, 0.5, NUM_FEATURES)
+        weights: npt.NDArray[np.float64] = self.random.uniform(-0.5, 0.5, NUM_FEATURES)
         bias: np.float64 = np.float64(0.0)
         
         evaluator = RougeEvaluator()
@@ -277,30 +278,30 @@ class ExtractiveSummarizer:
             shuffle(combined_data)
             all_features, y = zip(*combined_data)
             
-            for i in range(0, len(all_features), BATCH_SIZE):
-                w_deriv: npt.NDArray = np.zeros(NUM_FEATURES)
-                b_deriv = np.float64(0)
+            # for i in range(0, len(all_features), BATCH_SIZE):
+            w_deriv: npt.NDArray = np.zeros(NUM_FEATURES)
+            b_deriv = np.float64(0)
+            
+            batch_features = all_features[:BATCH_SIZE]
+            batch_labels = y[:BATCH_SIZE]
+            
+            for features, gold_y in zip(batch_features, batch_labels):
+                raw = features.dot(weights) + bias
+                norm = self.sigmoid(raw)
+                diff = norm - gold_y
+                b_deriv += (avg_deriv := np.mean(diff)) 
+                w_deriv += avg_deriv * np.mean(features, axis=0)   
+            
+            # prevent gradient explosion
+            if np.linalg.norm(w_deriv) > MAX_GRADIENT_NORM:
+                w_deriv = (w_deriv / np.linalg.norm(w_deriv)) * MAX_GRADIENT_NORM
+            if abs(b_deriv) > MAX_GRADIENT_NORM:
+                b_deriv = np.sign(b_deriv) * MAX_GRADIENT_NORM
                 
-                batch_features = all_features[i:i + BATCH_SIZE]
-                batch_labels = y[i:i + BATCH_SIZE]
-                
-                for features, gold_y in zip(batch_features, batch_labels):
-                    raw = features.dot(weights) + bias
-                    norm = self.sigmoid(raw)
-                    diff = norm - gold_y
-                    b_deriv += (avg_deriv := np.mean(diff)) 
-                    w_deriv += avg_deriv * np.mean(features, axis=0)   
-                
-                # prevent gradient explosion
-                if np.linalg.norm(w_deriv) > MAX_GRADIENT_NORM:
-                    w_deriv = (w_deriv / np.linalg.norm(w_deriv)) * MAX_GRADIENT_NORM
-                if abs(b_deriv) > MAX_GRADIENT_NORM:
-                    b_deriv = np.sign(b_deriv) * MAX_GRADIENT_NORM
-                    
-                # update weights and bias after each mini-batch
-                # using L2 regularisation
-                weights -= (w_deriv + 2 * LAMBDA * weights) * lr 
-                bias -= (b_deriv + 2 * LAMBDA * bias) * lr # type: ignore
+            # update weights and bias after each mini-batch
+            # using L2 regularisation
+            weights -= (w_deriv + 2 * LAMBDA * weights) * lr 
+            bias -= (b_deriv + 2 * LAMBDA * bias) * lr # type: ignore
                 
             
                 
