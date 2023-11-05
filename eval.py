@@ -6,6 +6,7 @@ import tqdm
 args = argparse.ArgumentParser()
 args.add_argument('--pred_data', type=str, default='prediction_file.json')
 args.add_argument('--eval_data', type=str, default='data/validation.json')
+args.add_argument('--no_write', action='store_true')
 args = args.parse_args()
 
 evaluator = RougeEvaluator()
@@ -26,28 +27,36 @@ for eval, pred in tqdm.tqdm(zip(eval_data, pred_data), total=len(eval_data)):
 
 scores = evaluator.batch_score(pred_sums, eval_sums)
 
-file_path = "models/weights.json"
-try:
-    with open(file_path, "r") as file:
-        data = json.load(file)
-except Exception:
-    data = {"models": []}
+if not args.no_write:
+    file_path = "models/weights.json"
+    try:
+        with open(file_path, "r") as file:
+            data = json.load(file)
+    except Exception:
+        data = {"models": []}
 
-d = {}
+    d = {}
 
-for k, v in scores.items(): # type: ignore
-    print(k)
-    d[k] = {
-        "precision": v["p"],
-        "recall": v["r"],
-        "f1": v["f"]
-    }
-    print("\tPrecision:\t", v["p"])
-    print("\tRecall:\t\t", v["r"])
-    print("\tF1:\t\t", v["f"])
-   
-data["models"][-1]["scores"] = d 
+    for k, v in scores.items(): # type: ignore
+        print(k)
+        d[k] = {
+            "precision": v["p"],
+            "recall": v["r"],
+            "f1": v["f"]
+        }
+        print("\tPrecision:\t", v["p"])
+        print("\tRecall:\t\t", v["r"])
+        print("\tF1:\t\t", v["f"])
 
-# Write the updated data back to the file
-with open(file_path, "w") as file:
-    json.dump(data, file, indent=4)
+    data["models"][-1]["scores"] = d 
+
+    # Write the updated data back to the file
+    with open(file_path, "w") as file:
+        json.dump(data, file, indent=4)
+        
+else:
+    for k, v in scores.items(): # type: ignore
+        print(k)
+        print("\tPrecision:\t", v["p"])
+        print("\tRecall:\t\t", v["r"])
+        print("\tF1:\t\t", v["f"])

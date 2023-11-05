@@ -19,7 +19,7 @@ class ExtractiveSummarizer:
             self.word_index, self.vectors = self._load_vectors(less_vectors=less_vectors)
         self.inv_doc_frq: Dict[str, float] = {}
         self.force_idf = force_idf
-        self.random = np.random.default_rng(seed=42)
+        self.random = np.random.default_rng(seed=None)
     
     @staticmethod
     def _load_vectors(fname="models/wiki-news-300d-1M.vec", less_vectors=False) -> Tuple[Dict[str, int], npt.NDArray[np.float32]]:
@@ -169,7 +169,7 @@ class ExtractiveSummarizer:
         def random_embedding():
             scale = np.sqrt(1 / 300) # dimension size
             return self.random.uniform(-scale, scale, 300)
-        STOP_WORDS = ['the', 'a', 'an']
+        STOP_WORDS = ['the', 'a', 'an', 'and']
         cleaned_sentence = [re.sub(LEAD_TRAIL_PUNC_REGEX,'',word) for word in sent.split() if word.lower() not in STOP_WORDS]
         if cleaned_sentence == []:
             return random_embedding()
@@ -255,11 +255,11 @@ class ExtractiveSummarizer:
         LR_DECAY = .01
         NUM_FEATURES = all_features[0].shape[1]
         BATCH_SIZE = 64
-        EARLY_STOP = 5
+        EARLY_STOP = 15
         LAMBDA = .6
         MAX_GRADIENT_NORM = 1.
         
-        weights: npt.NDArray[np.float64] = self.random.uniform(-0.5, 0.5, NUM_FEATURES)
+        weights: npt.NDArray[np.float64] = self.random.uniform(0, 0.5, NUM_FEATURES)
         bias: np.float64 = np.float64(0.0)
         
         evaluator = RougeEvaluator()
@@ -398,3 +398,26 @@ class ExtractiveSummarizer:
             summary = ' . '.join(top_sentences)
             
             yield summary
+            
+    def load_from_date(self, time):
+        self._init_idf_parallel([])
+        file_path = "models/weights.json"
+        try:
+            with open(file_path, "r") as file:
+                data = json.load(file)
+        except Exception:
+            print("Ran into a problem, weights could not be loaded")
+            return
+        
+        model = {}
+        
+        for mod in data['models']:
+            if mod['time'] == time:
+                model = mod
+                break
+            
+        if model == {}:
+            return print("Value not found for that date")
+        
+        self.weights = np.array(model['weights'])
+        self.bias = np.float64(model['bias'])

@@ -11,22 +11,28 @@ args.add_argument('--skip_vectors', action='store_true')
 args.add_argument('--force_idf', action='store_true')
 args.add_argument('--less_vectors', action='store_true')
 args.add_argument('--less_articles', action='store_true')
+args.add_argument('--load_at', type=str, default='')
 args = args.parse_args()
 
 model = ExtractiveSummarizer(args.skip_vectors, args.force_idf, args.less_vectors)
 
 with open(args.train_data, 'r') as f:
     train_data = json.load(f)
+    
+if args.load_at == '':
+    train_articles = [article['article'] for article in train_data]
+    train_highligt_decisions = [article['greedy_n_best_indices'] for article in train_data]
 
-train_articles = [article['article'] for article in train_data]
-train_highligt_decisions = [article['greedy_n_best_indices'] for article in train_data]
-
-preprocessed_train_articles = model.preprocess(train_articles)
-SHORTENED_NUM = 100
-if args.less_articles:
-    model.train(preprocessed_train_articles[:SHORTENED_NUM], train_highligt_decisions[:SHORTENED_NUM])
+    preprocessed_train_articles = model.preprocess(train_articles)
+    SHORTENED_NUM = 100
+    if args.less_articles:
+        model.train(preprocessed_train_articles[:SHORTENED_NUM], train_highligt_decisions[:SHORTENED_NUM])
+    else:
+        model.train(preprocessed_train_articles, train_highligt_decisions)
+        
 else:
-    model.train(preprocessed_train_articles, train_highligt_decisions)
+    model.load_from_date(args.load_at)
+        
 with open(args.eval_data, 'r') as f:
     eval_data = json.load(f)
 
