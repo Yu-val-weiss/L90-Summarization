@@ -393,8 +393,11 @@ class ExtractiveSummarizer:
             # Note that this is just one option for choosing sentences.
             # print(sentence_scores)
             top_k_idxs = sorted(range(len(sentence_scores)), key=lambda i: sentence_scores[i], reverse=True)
+            # top_k_idxs=list(range(len(sentence_scores)))
+            # shuffle(top_k_idxs)
             # print(top_k_idxs) 
             top_sentences = [article[i] for i in top_k_idxs if re.sub(LEAD_TRAIL_PUNC_REGEX, '', article[i]).strip()][:k]
+            # shuffle(top_sentences)
             summary = ' . '.join(top_sentences)
             
             yield summary
