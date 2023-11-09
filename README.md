@@ -1,6 +1,6 @@
 # Summarization Exercise
 
-This repository contains code to be used in the L90 assignment on summarization.
+This repository contains code to be used in the L90 assignments on summarization.
 
 ## Dataset
 
@@ -28,6 +28,14 @@ To evaluate your predictions, run the following:
 python eval.py --eval_data dataset_to_predict_for.json --pred_data prediction_file.json
 ```
 
+For assignment 3, we also provide some scripts to help you get started building an abstractive summarizer. Once you have implemented the code in models/abstractive summarizer, you can run it as follows:
+
+```
+python run_abstractive_summarizer.py --eval_data dataset_to_predict_for.json > prediction_file.json
+```
+
+Please note that you are welcome to ignore our scripts - they are just a scaffolding you can build from if you find it helpful.
+
 ## Installation
 
 To run our scripts, please run the following commands to install libraries for evaluation and pretty progress bars:
@@ -36,3 +44,11 @@ To run our scripts, please run the following commands to install libraries for e
 pip install tqdm
 pip install rouge_metric
 ```
+
+For assignment 3, please also install:
+
+```
+pip install numpy
+```
+
+Please also install PyTorch, following the specific instructions for your machine at https://pytorch.org/get-started/locally/.
