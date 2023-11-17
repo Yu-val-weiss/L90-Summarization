@@ -1,7 +1,10 @@
+from ast import Add
 from math import log, sqrt
 from typing import Type, Union
-from torch import Tensor, dropout, nn
+import numpy as np
+from torch import Tensor, nn
 import torch
+import copy
 
 # default pytorch is (seq_length, batch_size, data_size)
 # alternative is (batch, seq, data)
@@ -61,11 +64,12 @@ class PositionWiseFeedForward(nn.Module):
         return self.l_2(self.dropout(self.relu(self.l_1(X))))
     
 
-class TransformerEmbeddings(nn.Module):
+class TokEmbeddings(nn.Module):
     '''
     Embeddings for the transformer. Can be initialised from a pretrained numpy array. 
     '''
-    def __init__(self, embedding_dim, vocab_size, from_pretrained=None, freeze=True):
+    def __init__(self, embedding_dim: int, vocab_size: int, from_pretrained=None, freeze=True):
+        super().__init__()
         self.embedding_dim = embedding_dim
         if from_pretrained is not None:
             assert from_pretrained.shape == (vocab_size, embedding_dim)
@@ -74,7 +78,7 @@ class TransformerEmbeddings(nn.Module):
             self.embeddings = nn.Embedding(vocab_size, embedding_dim)
         
     def forward(self, X: Tensor):
-        return self.embeddings(X) * torch.sqrt(self.embedding_dim)
+        return self.embeddings(X) * sqrt(self.embedding_dim)
     
 
 class PositionalEncoding(nn.Module):
@@ -100,7 +104,7 @@ class PositionalEncoding(nn.Module):
         
     def forward(self, X: Tensor):
         # trim positional encodings to the actual length of the sequence
-        X = X + self.pe[:, :X.size(1)].requires_grad_(False) # this assumes batch first, otherwise use self.pe[:X.size(0)]
+        X = X + self.pos_enc[:, :X.size(1)].requires_grad_(False) # this assumes batch first, otherwise use self.pe[:X.size(0)]
         return self.dropout(X)
     
     
@@ -126,7 +130,7 @@ class MultiAttention(nn.Module):
         
         # reshape and apply linear projections
         Q, K, V = [
-            lin(x).view(batches, -1, self.h, self.d_k).transpose(1, 2)
+            lin(x).view(batches, -1, self.heads, self.d_k).transpose(1, 2)
             for lin, x in zip(self.linears, (Q, K, V))
         ]
         
@@ -139,7 +143,7 @@ class MultiAttention(nn.Module):
         x = (
             x.transpose(1, 2)
             .contiguous()
-            .view(batches, -1, self.h * self.d_k)
+            .view(batches, -1, self.heads * self.d_k)
         )
         del Q
         del K
@@ -155,7 +159,7 @@ class MultiAttention(nn.Module):
         if mask is not None:
             scores = scores.masked_fill(mask == 0, -1e9) # set to minus infinity all illegal connections
         
-        attn = nn.functional.softmax(scores)
+        attn = nn.functional.softmax(scores, dim=-1)
         attn = self.dropout(attn)
         return torch.matmul(attn, V), attn 
         
@@ -182,7 +186,7 @@ class EncoderLayer(nn.Module):
         
     def forward(self, X, mask):
         X = self.sub_1(X, lambda a: self.attn(a, a, a, mask))
-        return self.sub_2(X, self.feed_forward(X))
+        return self.sub_2(X, self.feed_forward)
         
 
 class Encoder(nn.Module):
@@ -201,3 +205,114 @@ class Encoder(nn.Module):
         return self.norm(X)
     
     
+class DecoderLayer(nn.Module):
+    def __init__(self, heads: int, d_model: int, d_ff: int, dropout: float):
+        super().__init__()
+        self.output_attn = MultiAttention(heads, d_model, dropout)
+        self.sub_1 = AddAndNorm(d_model, dropout)
+        
+        self.encoder_attn = MultiAttention(heads, d_model, dropout)
+        self.sub_2 = AddAndNorm(d_model, dropout)
+        
+        self.feed_forward = PositionWiseFeedForward(d_model, d_ff, dropout)
+        self.sub_3 = AddAndNorm(d_model, dropout)
+        
+    def forward(self, X: Tensor, from_encoder: Tensor, encoder_mask, outputs_mask):
+        X = self.sub_1(X, lambda x: self.output_attn(x, x, x, outputs_mask))
+        X = self.sub_2(X, lambda x: self.output_attn(K=from_encoder, V=from_encoder, Q=x, mask=encoder_mask))
+        return self.sub_3(X, self.feed_forward)
+    
+
+class Decoder(nn.Module):
+    def __init__(self, N: int, d_model: int, d_ff: int, heads: int, dropout: float):
+        super().__init__()
+        self.layers = clonelayer(N, DecoderLayer, heads, d_model, d_ff, dropout)
+        self.norm = LayerNormaliser(d_model)
+    
+    def forward(self, X: Tensor, from_encoder: Tensor, encoder_mask, outputs_mask):
+        """
+        Normalise the entire thing at the end, and pass mask through each `DecoderLayer`
+        """
+        for layer in self.layers:
+            X = layer(X, from_encoder, encoder_mask, outputs_mask)
+            
+        return self.norm(X)
+    
+class OutputGenerator(nn.Module):
+    def __init__(self, d_model: int, tgt_vocab_size: int) -> None:
+        super().__init__()
+        self.linear = nn.Linear(d_model, tgt_vocab_size)
+        
+    def forward(self, X: Tensor):
+        return nn.functional.log_softmax(self.linear(X), dim=-1)
+    
+    
+class EncoderDecoder(nn.Module):
+    def __init__(self, in_vocab_size: int, out_vocab_size: int,
+                 N=8, d_model=512, d_ff=2048, heads=8, dropout=0.1, # hyperparameter defaults from paper
+                 input_embeddings=None, freeze_in=True, 
+                 output_embeddings=None, freeze_out=True):
+        super().__init__()
+        self.encoder = Encoder(N, d_model, d_ff, heads, dropout)
+        self.decoder = Decoder(N, d_model, d_ff, heads, dropout)
+        
+        pos_enc = PositionalEncoding(d_model, dropout)
+        
+        # embeddings should be token embeddings and positional encoding in sequential
+        self.input_embeddings = nn.Sequential(
+            TokEmbeddings(d_model, in_vocab_size, input_embeddings, freeze_in),
+            copy.deepcopy(pos_enc)
+        )
+        self.output_embeddings = nn.Sequential(
+            TokEmbeddings(d_model, out_vocab_size, output_embeddings, freeze_out),
+            copy.deepcopy(pos_enc)
+        )
+        
+        self.generator = OutputGenerator(d_model, out_vocab_size)
+        
+        # initialise all parameters according to xavier uniform
+        for n,p in self.named_parameters():
+            # skip initialisation of embeddings if using pretrained embeddings
+            if n.startswith("input_embeddings") and input_embeddings is not None:
+                continue
+            if n.startswith("output_embeddings") and output_embeddings is not None:
+                continue
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+        
+        
+    def forward(self, source, target, src_mask, tgt_mask):
+        return self.decode(self.encode(source, src_mask), src_mask, target, tgt_mask)
+        
+    def encode(self, X, mask):
+        return self.encoder(self.input_embeddings(X), mask)
+
+    def decode(self, from_encoder, in_mask, output, out_mask):
+        return self.decoder(self.output_embeddings(output), from_encoder, in_mask, out_mask)
+        
+        
+def inference_test():
+    test_model = EncoderDecoder(11, 11, 2)
+    test_model.eval()
+    src = torch.LongTensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
+    src_mask = torch.ones(1, 1, 10)
+
+    memory = test_model.encode(src, src_mask)
+    ys = torch.zeros(1, 1).type_as(src)
+
+    for i in range(9):
+        out = test_model.decode(
+            memory, src_mask, ys, subsequent_mask(ys.size(1)).type_as(src.data)
+        )
+        prob = test_model.generator(out[:, -1])
+        _, next_word = torch.max(prob, dim=1)
+        next_word = next_word.data[0]
+        ys = torch.cat(
+            [ys, torch.empty(1, 1).type_as(src.data).fill_(next_word)], dim=1
+        )
+
+    print("Example Untrained Model Prediction:", ys)
+    
+if __name__ == '__main__':
+    for _ in range(10):
+        inference_test()
