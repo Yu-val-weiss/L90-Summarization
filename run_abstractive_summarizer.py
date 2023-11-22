@@ -2,6 +2,7 @@ import argparse
 import json
 from models.abstractive_summarizer import AbstractiveSummarizer
 import nltk
+from nltk.tokenize import WordPunctTokenizer, TreebankWordTokenizer
 
 args = argparse.ArgumentParser()
 args.add_argument('--train_data', type=str, default='data/train.json')
@@ -20,13 +21,15 @@ with open(args.validation_data, 'r') as f:
 train_articles = [article['article'] for article in train_data]
 train_summaries = [article['summary'] for article in train_data]
 
-model = AbstractiveSummarizer(train_articles, train_summaries)
+model = AbstractiveSummarizer(num_vectors=10000)
 
 nltk.download('punkt')
 
 tokeniser = nltk.word_tokenize
 
-print(tokeniser(train_articles[0]))
+# print(tokeniser(train_articles[0]))
+print(WordPunctTokenizer().tokenize(train_summaries[0]))
+print(TreebankWordTokenizer().tokenize(train_summaries[0]))
 
 raise
 

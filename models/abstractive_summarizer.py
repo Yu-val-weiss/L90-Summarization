@@ -7,6 +7,7 @@ import os
 from models.transformer import Transformer
 from models.summarizer import Summarizer
 import nltk
+from nltk.tokenize import TreebankWordTokenizer
 import torchtext.vocab
 from collections import Counter, OrderedDict
 
@@ -14,7 +15,7 @@ class AbstractiveSummarizer(Summarizer):
 
     model = None
 
-    def __init__(self, X: List[str], y: List[str], learning_rate=0.001, batch_size=32, grad_acc=1, num_epochs=10, keep_best_n_models=2,
+    def __init__(self, learning_rate=0.001, batch_size=32, grad_acc=1, num_epochs=10, keep_best_n_models=2,
                  num_vectors=-1):
         self.lr = learning_rate
         self.batch_size = batch_size
@@ -23,9 +24,7 @@ class AbstractiveSummarizer(Summarizer):
         self.keep_best_n = keep_best_n_models
         
         nltk.download('punkt')
-        self.tokeniser = nltk.word_tokenize
-        self.X = X
-        self.y = y
+        self.tokeniser = TreebankWordTokenizer().tokenize
         
         self.word_index, self.emb_vectors = self._load_vectors(num_vectors=num_vectors, specials=["<unk>","<pad>", "<sum>", "</sum>"])
        
@@ -43,8 +42,8 @@ class AbstractiveSummarizer(Summarizer):
         
     def train(self, X: List[str], y: List[str], val_X, val_y):
         """
-        X: list of list of sentences (i.e., articles)
-        y: list of sentences (i.e., summaries)
+        X: list of strings, each is an article (i.e., articles)
+        y: list of strings, each is a summary
         val_X: list of validation sentences
         learning_rate: learning rate for Adam optimizer
         batch_size: batch size for training
@@ -108,11 +107,11 @@ class AbstractiveSummarizer(Summarizer):
 
     def preprocess(self):
         """
-        X: list sentences (i.e., articles)
-        y: list of sentences (i.e., summaries)
+        X: list of strings (i.e., articles)
+        y: list of strings (i.e., summaries)
         """
 
-        # TODO: Implement me!
+        self.
 
     def compute_loss(self, batch):
         """
