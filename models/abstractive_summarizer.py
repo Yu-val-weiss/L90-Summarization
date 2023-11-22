@@ -70,7 +70,7 @@ class AbstractiveSummarizer(Summarizer):
             batches = [dataset[i:i + batch_size] for i in range(0, len(dataset), batch_size)]
 
             # Train on each batch:
-            for idx, batch in tqdm.tqdm(batches, desc="Training epoch {}".format(epoch)):
+            for idx, batch in tqdm.tqdm(enumerate(batches), desc="Training epoch {}".format(epoch)):
                 # Compute the loss:
                 loss = self.compute_loss(batch) / grad_acc
 
