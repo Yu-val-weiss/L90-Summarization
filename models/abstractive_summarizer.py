@@ -1,20 +1,51 @@
+from typing import List
 import tqdm
 import random
 import torch
 import numpy as np
 import os
+from models.transformer import Transformer
+from models.summarizer import Summarizer
+import nltk
+import torchtext.vocab
+from collections import Counter, OrderedDict
 
-class AbstractiveSummarizer:
+class AbstractiveSummarizer(Summarizer):
 
     model = None
 
-    def __init__(self):
-        self.model = None # TODO: Replace with your PyTorch model
+    def __init__(self, X: List[str], y: List[str], learning_rate=0.001, batch_size=32, grad_acc=1, num_epochs=10, keep_best_n_models=2,
+                 num_vectors=-1):
+        self.lr = learning_rate
+        self.batch_size = batch_size
+        self.grad_acc = grad_acc
+        self.epochs = num_epochs
+        self.keep_best_n = keep_best_n_models
         
-    def train(self, X, y, val_X, val_y, learning_rate=0.001, batch_size=32, grad_acc=1, num_epochs=10, keep_best_n_models=2):
+        nltk.download('punkt')
+        self.tokeniser = nltk.word_tokenize
+        self.X = X
+        self.y = y
+        
+        self.word_index, self.emb_vectors = self._load_vectors(num_vectors=num_vectors, specials=["<unk>","<pad>", "<sum>", "</sum>"])
+       
+        self.model = Transformer(
+            len(self.word_index),
+            len(self.word_index),
+            d_model=300,
+            d_ff=1200,
+            heads=6,
+            input_embeddings=self.emb_vectors,
+            freeze_in=False,
+            output_embeddings=self.emb_vectors,
+            freeze_out=False,
+        ) 
+        
+    def train(self, X: List[str], y: List[str], val_X, val_y):
         """
-        X: list of sentences (i.e., articles)
+        X: list of list of sentences (i.e., articles)
         y: list of sentences (i.e., summaries)
+        val_X: list of validation sentences
         learning_rate: learning rate for Adam optimizer
         batch_size: batch size for training
         grad_acc: number of gradient accumulation steps to sum over. Set to > 1 to simulate larger batch sizes on memory-limited machines.
@@ -75,7 +106,7 @@ class AbstractiveSummarizer:
         self.model.load_state_dict(torch.load(best_model_paths[best_model_index]))
 
 
-    def preprocess(self, X, y):
+    def preprocess(self):
         """
         X: list sentences (i.e., articles)
         y: list of sentences (i.e., summaries)

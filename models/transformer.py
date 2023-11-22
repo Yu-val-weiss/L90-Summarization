@@ -1,8 +1,6 @@
-from ast import Add
 from math import log, sqrt
 from typing import Type, Union
-import numpy as np
-from torch import Tensor, nn
+from torch import Tensor, nn, tensor
 import torch
 import copy
 
@@ -68,17 +66,17 @@ class TokEmbeddings(nn.Module):
     '''
     Embeddings for the transformer. Can be initialised from a pretrained numpy array. 
     '''
-    def __init__(self, embedding_dim: int, vocab_size: int, from_pretrained=None, freeze=True):
+    def __init__(self, d_model: int, vocab_size: int, from_pretrained=None, freeze=True):
         super().__init__()
-        self.embedding_dim = embedding_dim
+        self.d_model = d_model
         if from_pretrained is not None:
-            assert from_pretrained.shape == (vocab_size, embedding_dim)
+            assert from_pretrained.shape == (vocab_size, d_model)
             self.embeddings = nn.Embedding.from_pretrained(torch.from_numpy(from_pretrained), freeze=freeze)
         else:
-            self.embeddings = nn.Embedding(vocab_size, embedding_dim)
+            self.embeddings = nn.Embedding(vocab_size, d_model)
         
     def forward(self, X: Tensor):
-        return self.embeddings(X) * sqrt(self.embedding_dim)
+        return self.embeddings(X) * sqrt(self.d_model)
     
 
 class PositionalEncoding(nn.Module):
@@ -162,18 +160,6 @@ class MultiAttention(nn.Module):
         attn = nn.functional.softmax(scores, dim=-1)
         attn = self.dropout(attn)
         return torch.matmul(attn, V), attn 
-        
-    
-def subsequent_mask(size):
-    """
-    Mask out subsequent positions, i.e. decoder can only use what has already been predicted.
-    Direct quote from annotated implementation.
-    """
-    attn_shape = (1, size, size)
-    subsequent_mask = torch.triu(torch.ones(attn_shape), diagonal=1).type(
-        torch.uint8
-    )
-    return subsequent_mask == 0
 
 
 class EncoderLayer(nn.Module):
@@ -247,11 +233,27 @@ class OutputGenerator(nn.Module):
         return nn.functional.log_softmax(self.linear(X), dim=-1)
     
     
-class EncoderDecoder(nn.Module):
+class Transformer(nn.Module):
     def __init__(self, in_vocab_size: int, out_vocab_size: int,
                  N=8, d_model=512, d_ff=2048, heads=8, dropout=0.1, # hyperparameter defaults from paper
                  input_embeddings=None, freeze_in=True, 
                  output_embeddings=None, freeze_out=True):
+        """Initializes internal Module state, shared by both nn.Module and ScriptModule.
+
+        Args:
+            in_vocab_size (int): Size of input vocab.
+            out_vocab_size (int): Size of output vocab. 
+            N (int, optional): Number of cloned layers. Defaults to 8.
+            d_model (int, optional): The model's internal dimension. Defaults to 512.
+            d_ff (int, optional): The model's convolution dimension. Defaults to 2048 (i.e. 4 * d_model).
+            heads (int, optional): Number of heads in the attention layer. Must divide d_model. Defaults to 8.
+            dropout (float, optional): Probability of dropout. Defaults to 0.1.
+            input_embeddings (NDArray[float32], optional): Numpy array of input embeddings to use. Defaults to None.
+            freeze_in (bool, optional): Decides whether to continue learning on pretrained input embeddings. Defaults to True.
+            output_embeddings (NDArray[float32], optional): Numpy array of output embeddings to use. Defaults to None.
+            freeze_out (bool, optional): Decides whether to continue learning on pretrained output embeddings. Defaults to True.
+        """
+
         super().__init__()
         self.encoder = Encoder(N, d_model, d_ff, heads, dropout)
         self.decoder = Decoder(N, d_model, d_ff, heads, dropout)
@@ -281,38 +283,11 @@ class EncoderDecoder(nn.Module):
                 nn.init.xavier_uniform_(p)
         
         
-    def forward(self, source, target, src_mask, tgt_mask):
+    def forward(self, source: Tensor, target: Tensor, src_mask: Tensor, tgt_mask: Tensor):
         return self.decode(self.encode(source, src_mask), src_mask, target, tgt_mask)
         
-    def encode(self, X, mask):
+    def encode(self, X: Tensor, mask: Tensor):
         return self.encoder(self.input_embeddings(X), mask)
 
-    def decode(self, from_encoder, in_mask, output, out_mask):
+    def decode(self, from_encoder: Tensor, in_mask: Tensor, output: Tensor, out_mask: Tensor):
         return self.decoder(self.output_embeddings(output), from_encoder, in_mask, out_mask)
-        
-        
-def inference_test():
-    test_model = EncoderDecoder(11, 11, 2)
-    test_model.eval()
-    src = torch.LongTensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
-    src_mask = torch.ones(1, 1, 10)
-
-    memory = test_model.encode(src, src_mask)
-    ys = torch.zeros(1, 1).type_as(src)
-
-    for i in range(9):
-        out = test_model.decode(
-            memory, src_mask, ys, subsequent_mask(ys.size(1)).type_as(src.data)
-        )
-        prob = test_model.generator(out[:, -1])
-        _, next_word = torch.max(prob, dim=1)
-        next_word = next_word.data[0]
-        ys = torch.cat(
-            [ys, torch.empty(1, 1).type_as(src.data).fill_(next_word)], dim=1
-        )
-
-    print("Example Untrained Model Prediction:", ys)
-    
-if __name__ == '__main__':
-    for _ in range(10):
-        inference_test()

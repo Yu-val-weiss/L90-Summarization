@@ -1,5 +1,6 @@
 from random import shuffle
 from typing import Dict, List, Set, Tuple
+from models.summarizer import Summarizer
 import numpy as np
 import numpy.typing as npt
 from tqdm import tqdm
@@ -12,37 +13,14 @@ from evaluation.rouge_evaluator import RougeEvaluator
 
 LEAD_TRAIL_PUNC_REGEX = r"^[^\w\s]+|[^\w\s]+$"
 
-class ExtractiveSummarizer:
+class ExtractiveSummarizer(Summarizer):
     
-    def __init__(self, skip_vectors=False, force_idf=False, less_vectors=False) -> None:
+    def __init__(self, skip_vectors=False, force_idf=False, num_vectors=-1) -> None:
         if not skip_vectors:
-            self.word_index, self.vectors = self._load_vectors(less_vectors=less_vectors)
+            self.word_index, self.vectors = self._load_vectors(num_vectors=num_vectors)
         self.inv_doc_frq: Dict[str, float] = {}
         self.force_idf = force_idf
         self.random = np.random.default_rng(seed=None)
-    
-    @staticmethod
-    def _load_vectors(fname="models/wiki-news-300d-1M.vec", less_vectors=False) -> Tuple[Dict[str, int], npt.NDArray[np.float32]]:
-        with open(fname, 'r', encoding='utf-8', newline='\n', errors='ignore') as fin:
-            n, d = map(int, fin.readline().split())
-            word_index = {}
-
-            vectors = []
-            
-            SHORT = 1000
-
-            with tqdm(total=999994 if not less_vectors else SHORT, desc="Reading embedding vectors") as pbar:
-                for index, line in enumerate(fin):
-                    tokens = line.rstrip().split(' ')
-                    word = tokens[0]
-                    vector = np.array(tokens[1:], dtype=float)  # Convert the list of values to a NumPy array
-                    word_index[word] = index
-                    vectors.append(vector)
-                    pbar.update(1)
-                    if less_vectors and pbar.n == SHORT:
-                        break
-
-        return word_index, np.array(vectors)
         
     
     def _tf(self, article: List[str]) -> npt.NDArray[np.float32]:

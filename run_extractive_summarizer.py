@@ -14,7 +14,7 @@ args.add_argument('--less_articles', action='store_true')
 args.add_argument('--load_at', type=str, default='')
 args = args.parse_args()
 
-model = ExtractiveSummarizer(args.skip_vectors, args.force_idf, args.less_vectors)
+model = ExtractiveSummarizer(args.skip_vectors, args.force_idf, 1000 if args.less_vectors else -1)
 
 with open(args.train_data, 'r') as f:
     train_data = json.load(f)
