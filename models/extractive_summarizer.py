@@ -11,6 +11,7 @@ import json
 from datetime import datetime
 from evaluation.rouge_evaluator import RougeEvaluator
 
+
 LEAD_TRAIL_PUNC_REGEX = r"^[^\w\s]+|[^\w\s]+$"
 
 class ExtractiveSummarizer(Summarizer):

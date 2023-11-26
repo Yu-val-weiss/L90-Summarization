@@ -4,6 +4,13 @@ from models.abstractive_summarizer import AbstractiveSummarizer
 import nltk
 from nltk.tokenize import WordPunctTokenizer, TreebankWordTokenizer
 
+
+# from models.transformer import subsequent_mask
+
+# print(subsequent_mask(4))
+
+# raise
+
 args = argparse.ArgumentParser()
 args.add_argument('--train_data', type=str, default='data/train.json')
 args.add_argument('--validation_data', type=str, default='data/validation.json')
@@ -21,17 +28,7 @@ with open(args.validation_data, 'r') as f:
 train_articles = [article['article'] for article in train_data]
 train_summaries = [article['summary'] for article in train_data]
 
-model = AbstractiveSummarizer(num_vectors=10000)
-
-nltk.download('punkt')
-
-tokeniser = nltk.word_tokenize
-
-# print(tokeniser(train_articles[0]))
-print(WordPunctTokenizer().tokenize(train_summaries[0]))
-print(TreebankWordTokenizer().tokenize(train_summaries[0]))
-
-raise
+model = AbstractiveSummarizer(num_vectors=100000, batch_size=3, num_epochs=5)
 
 val_articles = [article['article'] for article in validation_data]
 val_summaries = [article['summary'] for article in validation_data]
@@ -45,4 +42,5 @@ eval_articles = [article['article'] for article in eval_data]
 summaries = model.predict(eval_articles)
 eval_out_data = [{'article': article, 'summary': summary} for article, summary in zip(eval_articles, summaries)]
 
-print(json.dumps(eval_out_data, indent=4))
+with open("abs_prediction_file.json", "w", encoding="utf-8") as f:
+    json.dump(eval_out_data, fp=f, ensure_ascii=False, indent=4)

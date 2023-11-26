@@ -1,21 +1,11 @@
 import time
 from typing import Union
-from transformer import Transformer
+from transformer import Transformer, subsequent_mask
 import torch
 from torch import nn
 from torch.optim.lr_scheduler import LambdaLR
 from tqdm import tqdm
 
-def subsequent_mask(size):
-    """
-    Mask out subsequent positions, i.e. decoder can only use what has already been predicted.
-    """
-    # Direct quote from annotated implementation.
-    attn_shape = (1, size, size)
-    subsequent_mask = torch.triu(torch.ones(attn_shape), diagonal=1).type(
-        torch.uint8
-    )
-    return subsequent_mask == 0
 
 class Batch:
     '''
