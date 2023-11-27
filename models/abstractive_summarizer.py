@@ -1,5 +1,7 @@
+import copy
 import random
-from typing import List
+from typing import List, Tuple
+
 from evaluation.rouge_evaluator import RougeEvaluator
 from tqdm import tqdm
 import torch
@@ -30,7 +32,9 @@ class AbstractiveSummarizer(Summarizer):
         nltk.download('punkt')
         self.tokeniser = TreebankWordTokenizer().tokenize
         
-        self.word_index, self.emb_vectors = self._load_vectors(num_vectors=num_vectors, specials=["<unk>","<pad>", "<sum>", "</sum>"], index_to_word=True) # index_to_word means dictionary also stores
+        self.specials = ["<unk>","<pad>", "<s>", "<e>"]
+        
+        self.word_index, self.emb_vectors = self._load_vectors(num_vectors=num_vectors, specials=self.specials, index_to_word=True) # index_to_word means dictionary also stores
                                                                                                                                                            # word, index pairs
        
         self.model = Transformer(
@@ -47,6 +51,8 @@ class AbstractiveSummarizer(Summarizer):
         ) 
         
         self.evaluator = RougeEvaluator()
+        
+        
         
     def train(self, X_raw: List[str], y_raw: List[str], val_X, val_y):
         """
@@ -125,20 +131,21 @@ class AbstractiveSummarizer(Summarizer):
         self.model.load_state_dict(torch.load(best_model_paths[best_model_index]))
 
 
-    def preprocess(self, X, y):
+    def preprocess(self, *args: List[str]):
         """
-        X: list of strings (i.e., articles)
-        y: list of strings (i.e., summaries)
+        args: iterable of List of strings
         """
-        tok_x = map(lambda x: self.tokeniser(x), X)
-        tok_y = map(lambda x: self.tokeniser(x), y)
-        
-        numericalized_x = [torch.tensor([self.word_index.get(word, self.word_index['<unk>']) for word in sentence]) for sentence in tqdm(tok_x, desc="Preprocessing x")]
-
-        # Add start and end tokens to numericalized_y
-        numericalized_y = [torch.tensor([self.word_index['<sum>']] + [self.word_index.get(word, self.word_index['<unk>']) for word in sentence] + [self.word_index['</sum>']]) for sentence in tqdm(tok_y, desc="Preprocessing y")]
-
-        return pad_sequence(numericalized_x, batch_first=True, padding_value=self.word_index['<pad>']), pad_sequence(numericalized_y, batch_first=True, padding_value=self.word_index['<pad>'])
+        def _pr(X: List[str], ind=0):
+            # print("Input to preprocessor:", X)
+            tok = map(lambda x: self.tokeniser(x), X)
+            # print("Tokenized", list(copy.deepcopy(tok)))
+            numericalized = [torch.tensor([self.word_index['<s>']] + [self.word_index.get(word, self.word_index['<unk>'] ) for word in sentence] + [self.word_index['<e>']]) for sentence in tqdm(tok, desc=f"Preprocessing arg {ind}")]
+            # print("Numericalized size", len(numericalized))
+            p_s = pad_sequence(numericalized, batch_first=True, padding_value=self.word_index['<pad>'])
+            # print("Padded size", p_s.shape)
+            return p_s
+            
+        return tuple(_pr(X, ind) for ind, X in enumerate(args))
         
 
     def compute_loss(self, X_batch: Tensor, Y_batch: Tensor):
@@ -158,13 +165,14 @@ class AbstractiveSummarizer(Summarizer):
         src_mask = (X_batch != pad_idx).unsqueeze(1)
         
         # print("Loss src mask:", src_mask.shape)
-
+        tgt_seq = Y_batch[:, :-1]
         # Target Mask
-        tgt_mask = (Y_batch != pad_idx).unsqueeze(1)
-        tgt_mask = tgt_mask & self.subsequent_mask(Y_batch.size(-1))
-        
+        tgt_mask = (tgt_seq != pad_idx).unsqueeze(1)
+        tgt_mask = tgt_mask & self.subsequent_mask(tgt_seq.size(-1))
     
-        predictions = self.model.forward(X_batch, Y_batch, src_mask, tgt_mask)
+        predictions = self.model.forward(X_batch, tgt_seq, src_mask, tgt_mask)
+        
+        # print(predictions)
         
         # print("Predictions shape: ", predictions.shape)
         gen = self.model.generator(predictions)
@@ -173,7 +181,7 @@ class AbstractiveSummarizer(Summarizer):
         # print(gen[0])
         
         # convert Y_batch to a 1-hot vector for each word 
-        y_one_hot = F.one_hot(Y_batch, num_classes=len(self.emb_vectors)).to(torch.float)
+        y_one_hot = F.one_hot(Y_batch[:, 1:], num_classes=len(self.emb_vectors)).to(torch.float)
         
         # print("Y one hot shape:", y_one_hot.shape)
         
@@ -193,40 +201,12 @@ class AbstractiveSummarizer(Summarizer):
         return subsequent_mask == 0
 
 
-    def generate(self, X):
-        """
-        X: list of sentences (i.e., articles)
-        """
-
-        self.model.eval()
-        
-        generated_summaries = []
-
-        for article in tqdm(X, desc="Running abstractive summarizer"):
-            with torch.no_grad():
-                # Tokenize and numericalize the input article
-                input_tokens = self.tokeniser(article)
-                input_indices = torch.tensor([self.word_index.get(word, self.word_index['<unk>']) for word in input_tokens]).unsqueeze(0)
-
-                # Source Mask
-                src_mask = (input_indices != self.word_index['<pad>']).unsqueeze(1).unsqueeze(2)
-
-                # Generate summary
-                output_indices = self.model.predict(input_indices, src_mask, self.word_index['<sum>'], self.word_index['</sum>'])
-
-                # Decode the generated summary
-                output_tokens = self.decode(output_indices)
-                generated_summaries.append(' '.join(output_tokens))
-
-        return generated_summaries
-
-
     def decode(self, tokens: List[int]) -> List[str]:
         """
         tokens: list of token indices
         """
-        assert tokens[0] == '<sum>' and tokens[-1] == '</sum>'
-        return [self.word_index[token] for token in tokens]
+        assert (start := self.word_index['<s>']) in tokens and (end := self.word_index['<e>']) in tokens
+        return [self.word_index[word] for word in tokens[tokens.index(start)+1:tokens.index(end)] if word not in self.specials]
 
     def compute_validation_score(self, X, y):
         """
@@ -246,10 +226,9 @@ class AbstractiveSummarizer(Summarizer):
             
             x = self.model.generator(out)
             x = torch.argmax(x, dim=-1)
-            specials = {"<unk>","<pad>", "<sum>", "</sum>"}
             predicted_words = [[self.word_index[ind] for ind in sent] for sent in x.tolist()]
-            # print(predicted_words[0])
-            predicted_words = [' '.join([word for word in sent[sent.index("<sum>")+1:sent.index("</sum>") if '</sum>' in sent else len(sent)] if word not in specials]) for sent in predicted_words]
+            predicted_words = [' '.join([word for word in sent[sent.index("<s>")+1 if "<s>" in sent else 0:sent.index("<e>") if '<e>' in sent else len(sent)] if word not in self.specials]) for sent in predicted_words]
+            # print(predicted_words)
             r = self.evaluator.batch_score(predicted_words, y)
             
             # Convert the data to a list of tuples for tabulate
@@ -265,6 +244,25 @@ class AbstractiveSummarizer(Summarizer):
             
             rouge_1_f1 = r.get('rouge-1').get('f') # type: ignore
             return rouge_1_f1
+        
+        
+    def greedy_decode(self, src, src_mask, max_len, start_symbol):
+        memory = self.model.encode(src, src_mask)
+        ys = torch.zeros(1, 1).fill_(start_symbol).type_as(src.data)
+        for i in (pbar:=tqdm(range(max_len - 1), desc="Generating symbols", leave=False)):
+            out = self.model.decode(
+                memory, src_mask, ys, self.subsequent_mask(ys.size(1)).type_as(src.data)
+            )
+            prob = self.model.generator(out[:,-1])
+            # print(prob)
+            _, next_word = torch.max(prob, dim=1)
+            # print(next_word)
+            next_word = next_word.data[0]
+            # pbar.write("Next word index: " + str(next_word))
+            ys = torch.cat(
+                [ys, torch.zeros(1, 1).type_as(src.data).fill_(next_word)], dim=1
+            )
+        return ys
             
 
     def predict(self, X, k=40):
@@ -273,36 +271,18 @@ class AbstractiveSummarizer(Summarizer):
         """
         Y = []
         
+        (X,) = self.preprocess(X)
+        
+        self.model.eval()
         with torch.no_grad():
-            
-            for article in tqdm(map(lambda x: self.tokeniser(x), X), desc="Running abstractive summarizer", disable=True):
-                # print(article)
-                # print(len(article))
-                article = torch.tensor([self.word_index.get(word, self.word_index['<unk>']) for word in article]).unsqueeze(0)
-                print("Article shape:", article.size())
-                src_mask = (article != self.word_index['<pad>'])
-                print("Src mask shape", src_mask.shape)
-                # print(src_mask)
-
-                memory = self.model.encode(article, src_mask)
-                print("Memory shape", memory.shape)
-                ys = torch.zeros(1, 1).fill_(self.word_index['<sum>']).type_as(article.data)
-                print("ys shape: ", ys.shape)
-                for step in tqdm(range(k - 1), desc="Predicting article", leave=False, disable=True):
-                    out = self.model.decode(
-                        memory, src_mask, ys, self.subsequent_mask(ys.size(1)).type_as(article.data)
-                    )
-                    print("Out shape:", out.shape)
-                    prob = self.model.generator(out[:, -1])
-                    print("Prob shape:", prob.shape)
-                    _, next_word = torch.max(prob, dim=1)
-                    print("Next Word:", next_word)
-                    next_word = next_word.item()
-                    ys = torch.cat(
-                        [ys, torch.zeros(1, 1).type_as(article.data).fill_(next_word)], dim=1
-                    )
-                    print(f"Step {step + 1}: Next Word - {self.word_index[next_word]}, Current Sequence - {ys}")
-                    if next_word == self.word_index['</sum>']:
-                        break
-                Y.append(" ".join(map(lambda x: self.word_index[x],ys[0].tolist()))) # convert from index to string
+            for src in tqdm(X, desc="Running abstractive summarizer", disable=True):
+                print("Src shape", src.shape)
+                print("Src", src)
+                src.unsqueeze_(0)
+                max_len = src.size(-1) // 10
+                src_mask = torch.ones(1,1,src.size(-1))
+                y = self.greedy_decode(src, src_mask, max_len, 2)
+                print(y)
+                Y.append(self.decode(y.squeeze().tolist()))
+                
         return Y

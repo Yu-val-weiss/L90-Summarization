@@ -4,11 +4,29 @@ from torch import Tensor, nn, tensor
 import torch
 import copy
 
-import inspect
-
 # default pytorch is (seq_length, batch_size, data_size)
 # alternative is (batch, seq, data)
 # thinking I will use batch first as most intuitive to me
+
+##############################################################################################################
+##                                                                                                          ##
+##                                                                                                          ##
+##                                                                                                          ##
+##               NB FOR TRAINING: tgt_seq = Y_batch[:, :-1]     (and therefore for mask stuff as well)      ##
+##                                                                                                          ##
+##               This is because, during training, we want the model to predict the next token in the       ##
+##               sequence based on the provided input and the ground truth sequence up to                   ##
+##               the second-to-last token.                                                                  ##
+##                                                                                                          ##
+##                                                                                                          ##
+##                                                                                                          ##
+##               for loss calculation use   Y_batch[:, 1:]                                                  ##
+##                                                                                                          ##
+##               This way, you are essentially using the ground truth for the initial token and             ##
+##               then using the model's predictions for the subsequent tokens during training               ##
+##                                                                                                          ##
+##                                                                                                          ##
+##############################################################################################################
 
 def clonelayer(N: int, layer: Type[nn.Module], *args, **kwargs):
     '''
@@ -321,37 +339,17 @@ class Transformer(nn.Module):
     def decode(self, from_encoder: Tensor, in_mask: Tensor, output: Tensor, out_mask: Tensor) -> Tensor:
         return self.decoder(self.output_embeddings(output), from_encoder, in_mask, out_mask)
     
-    def emb_to_ind(self, seq: List[Tensor]):
-        return [int(torch.argmax(self.output_embeddings.weight.data == query_embedding, dim=0).item()) for query_embedding in seq]
-    
-    def predict(self, source: Tensor, src_mask: Tensor, start_token: int, end_token: int, max_len=40):
-        """Generate predictions for the given source sequence.
-
-        Args:
-            source (Tensor): Input sequence tensor (as vocab indices).  
-            src_mask (Tensor): Mask for the input sequence.
-            max_len (int, optional): Max length of the generated output sequence. Defaults to 40.
-            
-        Returns:
-            Tensor: Generated output sequence tensor.
-        """
-        
-        encoder_op = self.encode(source, src_mask)      
-        
-        output_seq = torch.tensor([[start_token]])
-        
-        for _ in range(max_len):
-            target_mask = subsequent_mask(output_seq.size(1))
-            
-            decoder_op = self.decode(encoder_op, src_mask, output_seq, target_mask)
-            
-            next_token = decoder_op[:, -1, :].argmax(dim=-1).unsqueeze(1)
-            
-            output_seq = torch.cat([output_seq, next_token], dim=-1)
-            
-            if next_token.item() == end_token:
-                break
-            
-            
-        return self.generator(output_seq).squeeze().tolist()
-            
+    def greedy_decode(self, src, src_mask, max_len, start_symbol):
+        memory = self.encode(src, src_mask)
+        ys = torch.zeros(1, 1).fill_(start_symbol).type_as(src.data)
+        for _ in range(max_len - 1):
+            out = self.decode(
+                memory, src_mask, ys, self.subsequent_mask(ys.size(1)).type_as(src.data)
+            )
+            prob = self.generator(out[:,-1])
+            _, next_word = torch.max(prob, dim=1)
+            next_word = next_word.data[0]
+            ys = torch.cat(
+                [ys, torch.zeros(1, 1).type_as(src.data).fill_(next_word)], dim=1
+            )
+        return ys
