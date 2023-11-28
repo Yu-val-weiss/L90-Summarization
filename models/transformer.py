@@ -57,9 +57,12 @@ class LayerNormaliser(nn.Module):
         self.gain = nn.Parameter(torch.ones(d_model))
         self.bias = nn.Parameter(torch.zeros(d_model))
         self.epsilon = epsilon  # prevent division by zero
+        # self.mps = torch.backends.mps.is_available()
         
     def forward(self, X: Tensor):
-        sigma, mu = torch.std_mean(X, dim=-1, keepdim=True) 
+        mu = torch.mean(X, dim=-1, keepdim=True)
+        sigma = torch.std(X, dim=-1, keepdim=True)      
+        # sigma, mu = torch.std_mean(X, dim=-1, keepdim=True) 
         return (self.gain * (X - mu) / (sigma + self.epsilon)) + self.bias
     
 
