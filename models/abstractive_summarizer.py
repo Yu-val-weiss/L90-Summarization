@@ -5,7 +5,7 @@ from typing import List, Tuple
 from evaluation.rouge_evaluator import RougeEvaluator
 from tqdm import tqdm
 import torch
-from torch import Tensor, nn
+from torch import Tensor, device, nn
 from torch.nn.utils.rnn import pad_sequence
 import torch.nn.functional as F
 import numpy as np
@@ -50,11 +50,27 @@ class AbstractiveSummarizer(Summarizer):
             pos_enc_max_len=10000
         ) 
         
+        self.mps = False
+        self.cuda = False
+        
+        self.device = torch.device("cpu")
+        
+        if torch.backends.mps.is_available():
+            self.mps = True
+            self.device = torch.device("mps")
+            self.model.float()
+            self.model.to(self.device)
+            
+        if torch.cuda.is_available():
+            self.mps = False
+            self.cuda = True
+            self.device = torch.device("cuda")
+            self.model.to(self.device)
+            
+        
         self.evaluator = RougeEvaluator()
         
-        
-        
-    def train(self, X_raw: List[str], y_raw: List[str], val_X, val_y):
+    def train(self, X_raw: List[str], y_raw: List[str], val_X, val_y, delete_models=False):
         """
         X: list of strings, each is an article
         y: list of strings, each is a summary
@@ -67,9 +83,16 @@ class AbstractiveSummarizer(Summarizer):
         """
 
         assert len(X_raw) == len(y_raw), "X and y must have the same length"
+        
+        if delete_models:
+            dir = os.listdir()
+            for item in dir:
+                if item.endswith(".pt"):
+                    os.remove(item)
 
         self.model.train()
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
+        lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
         X, y = self.preprocess(X_raw, y_raw)
 
         best_model_paths = []
@@ -115,7 +138,7 @@ class AbstractiveSummarizer(Summarizer):
             if len(best_model_scores) < self.keep_best_n or score > min(best_model_scores):
                 # Save the model:
                 best_model_scores.append(score)
-                best_model_paths.append("model-" + str(epoch) + "_score-" + str(score) + ".pt")
+                best_model_paths.append(f"model-{epoch}_score-{score:.3f}.pt")
                 torch.save(self.model.state_dict(), best_model_paths[-1])
 
                 # Delete the worst model:
@@ -139,7 +162,9 @@ class AbstractiveSummarizer(Summarizer):
             # print("Input to preprocessor:", X)
             tok = map(lambda x: self.tokeniser(x), X)
             # print("Tokenized", list(copy.deepcopy(tok)))
-            numericalized = [torch.tensor([self.word_index['<s>']] + [self.word_index.get(word, self.word_index['<unk>'] ) for word in sentence] + [self.word_index['<e>']]) for sentence in tqdm(tok, desc=f"Preprocessing arg {ind}")]
+            
+            numericalized = [torch.tensor([self.word_index['<s>']] + [self.word_index.get(word, self.word_index['<unk>'] ) for word in sentence] + [self.word_index['<e>']], device=self.device)
+                             for sentence in tqdm(tok, desc=f"Preprocessing arg {ind}")]
             # print("Numericalized size", len(numericalized))
             p_s = pad_sequence(numericalized, batch_first=True, padding_value=self.word_index['<pad>'])
             # print("Padded size", p_s.shape)
@@ -157,18 +182,26 @@ class AbstractiveSummarizer(Summarizer):
         # print("y batch size:", Y_batch.shape)
         
 
-        criterion = nn.CrossEntropyLoss()
+        criterion = nn.CrossEntropyLoss(label_smoothing=0.2)
         
         pad_idx = self.word_index['<pad>']
+        
+        # print("X device", X_batch.device)
+        # print("Y device", Y_batch.device)
         # print("Pad idx:", pad_idx)
          # Source Mask
         src_mask = (X_batch != pad_idx).unsqueeze(1)
         
+        # print("Src mask device", src_mask.device)
+        
         # print("Loss src mask:", src_mask.shape)
         tgt_seq = Y_batch[:, :-1]
+        
+        # print("tgt seq device", tgt_seq.device)
+        
         # Target Mask
         tgt_mask = (tgt_seq != pad_idx).unsqueeze(1)
-        tgt_mask = tgt_mask & self.subsequent_mask(tgt_seq.size(-1))
+        tgt_mask = tgt_mask & self.subsequent_mask(tgt_seq.size(-1), device=self.device)
     
         predictions = self.model.forward(X_batch, tgt_seq, src_mask, tgt_mask)
         
@@ -189,13 +222,13 @@ class AbstractiveSummarizer(Summarizer):
         
        
     @staticmethod
-    def subsequent_mask(size):
+    def subsequent_mask(size, device=None):
         """
         Mask out subsequent positions, i.e. decoder can only use what has already been predicted.
         """
         # Direct quote from annotated implementation.
         attn_shape = (1, size, size)
-        subsequent_mask = torch.triu(torch.ones(attn_shape), diagonal=1).type(
+        subsequent_mask = torch.triu(torch.ones(attn_shape, device=device), diagonal=1).type(
             torch.uint8
         )
         return subsequent_mask == 0
@@ -228,6 +261,9 @@ class AbstractiveSummarizer(Summarizer):
             x = torch.argmax(x, dim=-1)
             predicted_words = [[self.word_index[ind] for ind in sent] for sent in x.tolist()]
             predicted_words = [' '.join([word for word in sent[sent.index("<s>")+1 if "<s>" in sent else 0:sent.index("<e>") if '<e>' in sent else len(sent)] if word not in self.specials]) for sent in predicted_words]
+            # for i in range(len(predicted_words)):
+            #     print(f"Prediction {i}:\n", predicted_words[i])
+            #     print(f"Truth {i}:\n", y[i])
             # print(predicted_words)
             r = self.evaluator.batch_score(predicted_words, y)
             
@@ -248,7 +284,10 @@ class AbstractiveSummarizer(Summarizer):
         
     def greedy_decode(self, src, src_mask, max_len, start_symbol):
         memory = self.model.encode(src, src_mask)
-        ys = torch.zeros(1, 1).fill_(start_symbol).type_as(src.data)
+        ys = torch.zeros(1, 1, device=self.device).fill_(start_symbol).type_as(src.data)
+        ys = torch.cat(
+                [ys, torch.zeros(1, 1).type_as(src.data).fill_(random.randint(5,100))], dim=1
+            ) # remember TODO to undo this line
         for i in (pbar:=tqdm(range(max_len - 1), desc="Generating symbols", leave=False)):
             out = self.model.decode(
                 memory, src_mask, ys, self.subsequent_mask(ys.size(1)).type_as(src.data)
@@ -263,6 +302,76 @@ class AbstractiveSummarizer(Summarizer):
                 [ys, torch.zeros(1, 1).type_as(src.data).fill_(next_word)], dim=1
             )
         return ys
+    
+    
+    def beam_search_decode(self, src, src_mask, max_len, start_symbol, beam_size):
+        memory = self.model.encode(src, src_mask)
+        ys = torch.ones(1, 1, device=self.device).fill_(start_symbol).type_as(src.data)
+
+        # Initialize the beam with the start symbol
+        beams = [(ys, 0)]  # (current_sequence, log_prob)
+
+        for step in tqdm(range(max_len - 1), desc="Generating symbols", leave=False):
+            new_beams = []
+
+            for current_seq, log_prob in beams:
+                # Extend the current sequence
+                out = self.model.decode(
+                    memory,
+                    src_mask,
+                    current_seq,
+                    self.subsequent_mask(current_seq.size(1)).type_as(src.data),
+                )
+                prob = self.model.generator(out[:, -1])
+                log_probs, next_words = torch.topk(prob, beam_size, dim=1)
+
+                for i in range(beam_size):
+                    new_seq = torch.cat([current_seq, next_words[:, i:i + 1]], dim=1)
+                    new_log_prob = log_prob + log_probs[:, i]
+
+                    new_beams.append((new_seq, new_log_prob.item()))
+
+            # Select the top-k sequences
+            new_beams = sorted(new_beams, key=lambda x: x[1], reverse=True)[:beam_size]
+            beams = new_beams
+
+        # Return the best sequence
+        best_sequence, _ = max(beams, key=lambda x: x[1])
+        return best_sequence
+    
+    
+    def nucleus_decode(self, src, src_mask, max_len, start_symbol, top_p: float):
+        memory = self.model.encode(src, src_mask)
+        ys = torch.zeros(1, 1, device=self.device).fill_(start_symbol).type_as(src.data)
+        for i in (pbar:=tqdm(range(max_len - 1), desc="Generating symbols", leave=False)):
+            out = self.model.decode(
+                memory, src_mask, ys, self.subsequent_mask(ys.size(1)).type_as(src.data)
+            )
+            prob = self.model.generator(out[:,-1], True)
+            
+            # sample next word from top p distribution
+            sorted_probs, sorted_indices = torch.sort(prob, descending=True, dim=-1)
+            print("Sorted indices", sorted_indices.shape)
+            print("Sorted probs", sorted_probs.shape)
+            cumulative_probs = torch.cumsum(sorted_probs, dim=-1) # need exp since log_softmax used by generator
+            mask = cumulative_probs <= top_p
+            truncated_probs = torch.where(mask, sorted_probs, torch.tensor(0.0))
+            truncated_probs = F.softmax(truncated_probs, dim=-1)
+            
+            sampled_index = torch.multinomial(truncated_probs, 1).item()
+            
+            print(sampled_index)
+            
+            next_word = sorted_indices[:, int(sampled_index)]
+            
+            next_word = next_word.item()
+            
+            print(f"{next_word}: {self.word_index[next_word]}")
+            # pbar.write("Next word index: " + str(next_word))
+            ys = torch.cat(
+                [ys, torch.zeros(1, 1).type_as(src.data).fill_(next_word)], dim=1
+            )
+        return ys
             
 
     def predict(self, X, k=40):
@@ -272,7 +381,7 @@ class AbstractiveSummarizer(Summarizer):
         Y = []
         
         (X,) = self.preprocess(X)
-        
+        X = X.to(self.device)
         self.model.eval()
         with torch.no_grad():
             for src in tqdm(X, desc="Running abstractive summarizer", disable=True):
@@ -280,9 +389,13 @@ class AbstractiveSummarizer(Summarizer):
                 print("Src", src)
                 src.unsqueeze_(0)
                 max_len = src.size(-1) // 10
-                src_mask = torch.ones(1,1,src.size(-1))
-                y = self.greedy_decode(src, src_mask, max_len, 2)
+                src_mask = torch.ones(1,1,src.size(-1)).to(self.device)
+                # y = self.nucleus_decode(src, src_mask, max_len, 2, 0.3)
+                # y = self.greedy_decode(src, src_mask, max_len, 2)
+                y = self.beam_search_decode(src, src_mask, max_len, 2, 10)
                 print(y)
-                Y.append(self.decode(y.squeeze().tolist()))
+                y = self.decode(y.squeeze().tolist())
+                print(y)
+                Y.append(y)
                 
         return Y

@@ -275,8 +275,10 @@ class OutputGenerator(nn.Module):
         super().__init__()
         self.linear = nn.Linear(d_model, tgt_vocab_size)
         
-    def forward(self, X: Tensor):
+    def forward(self, X: Tensor, use_non_log_softmax=False):
         X = X.to(self.linear.weight.dtype)
+        if use_non_log_softmax:
+            return nn.functional.softmax(self.linear(X), dim=-1)
         return nn.functional.log_softmax(self.linear(X), dim=-1)
     
     
