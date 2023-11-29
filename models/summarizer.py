@@ -6,9 +6,11 @@ import numpy.typing as npt
 
 class Summarizer:
     @staticmethod
-    def _load_vectors(fname="models/wiki-news-300d-1M.vec", num_vectors=-1, specials: Collection[str] = [], index_to_word=False) -> Tuple[Dict, npt.NDArray[np.float32]]:
+    def _load_vectors(fname="models/wiki-news-300d-1M.vec", num_vectors=-1, specials: Collection[str] = [], index_to_word=False, first_line_is_n_d=True, dim=300) -> Tuple[Dict, npt.NDArray[np.float32]]:
         with open(fname, 'r', encoding='utf-8', newline='\n', errors='ignore') as fin:
-            n, d = map(int, fin.readline().split())
+            if first_line_is_n_d:
+                n, d = map(int, fin.readline().split())
+                assert d == dim
             word_index = {}
 
             vectors = []
@@ -19,9 +21,9 @@ class Summarizer:
                     if index_to_word:
                         word_index[ind] = spec
                     if spec.lower() == '<pad>':
-                        vectors.append(np.zeros(d))
+                        vectors.append(np.zeros(dim))
                     else:
-                        vectors.append(np.random.uniform(-0.2,0.2,size=d))
+                        vectors.append(np.random.uniform(-0.2,0.2,size=dim))
 
             with tqdm(total=999994 if num_vectors == -1 else num_vectors, desc="Reading embedding vectors") as pbar:
                 for index, line in enumerate(fin):
