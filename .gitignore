@@ -165,3 +165,4 @@ models/wiki-*
 prediction_file.json
 *.pt
 abs_prediction_file.json
+glove.*.txt
