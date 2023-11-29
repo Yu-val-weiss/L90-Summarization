@@ -1,11 +1,10 @@
-import copy
 import random
-from typing import List, Tuple
+from typing import List
 
 from evaluation.rouge_evaluator import RougeEvaluator
 from tqdm import tqdm
 import torch
-from torch import Tensor, device, nn
+from torch import Tensor, nn
 from torch.nn.utils.rnn import pad_sequence
 import torch.nn.functional as F
 import numpy as np
@@ -22,7 +21,7 @@ class AbstractiveSummarizer(Summarizer):
     # model = None
 
     def __init__(self, learning_rate=0.001, batch_size=32, grad_acc=1, num_epochs=10, keep_best_n_models=2,
-                 num_vectors=-1):
+                 num_vectors=-1, use_device=True):
         self.lr = learning_rate
         self.batch_size = batch_size
         self.grad_acc = grad_acc
@@ -34,15 +33,17 @@ class AbstractiveSummarizer(Summarizer):
         
         self.specials = ["<unk>","<pad>", "<s>", "<e>"]
         
-        self.word_index, self.emb_vectors = self._load_vectors(num_vectors=num_vectors, specials=self.specials, index_to_word=True) # index_to_word means dictionary also stores
+        self.word_index, self.emb_vectors = self._load_vectors(fname='models/glove.6B.100d.txt', first_line_is_n_d=False, dim=100,
+                                                               num_vectors=num_vectors, specials=self.specials, index_to_word=True) # index_to_word means dictionary also stores
                                                                                                                                                            # word, index pairs
        
         self.model = Transformer(
             len(self.emb_vectors),
             len(self.emb_vectors),
-            d_model=300,
-            d_ff=1200,
-            heads=6,
+            N=4,
+            d_model=self.emb_vectors.shape[-1],
+            d_ff=self.emb_vectors.shape[-1]*4,
+            heads=4,
             input_embeddings=self.emb_vectors,
             freeze_in=False,
             output_embeddings=self.emb_vectors,
@@ -55,22 +56,23 @@ class AbstractiveSummarizer(Summarizer):
         
         self.device = torch.device("cpu")
         
-        if torch.backends.mps.is_available():
-            self.mps = True
-            self.device = torch.device("mps")
-            self.model.float()
-            self.model.to(self.device)
+        if use_device:
+            if torch.backends.mps.is_available():
+                self.mps = True
+                self.device = torch.device("mps")
+                self.model.float()
+                self.model.to(self.device)    
             
-        if torch.cuda.is_available():
-            self.mps = False
-            self.cuda = True
-            self.device = torch.device("cuda")
-            self.model.to(self.device)
+            elif torch.cuda.is_available():
+                self.mps = False
+                self.cuda = True
+                self.device = torch.device("cuda")
+                self.model.to(self.device)
             
         
         self.evaluator = RougeEvaluator()
         
-    def train(self, X_raw: List[str], y_raw: List[str], val_X, val_y, delete_models=False):
+    def train(self, X_raw: List[str], y_raw: List[str], val_X, val_y, delete_models=False, load_model: str | None = None):
         """
         X: list of strings, each is an article
         y: list of strings, each is a summary
@@ -84,6 +86,11 @@ class AbstractiveSummarizer(Summarizer):
 
         assert len(X_raw) == len(y_raw), "X and y must have the same length"
         
+        if load_model is not None:
+            print(f"Loading model {load_model}...")
+            self.model.load_state_dict(torch.load(load_model))
+            return
+        
         if delete_models:
             dir = os.listdir()
             for item in dir:
@@ -92,7 +99,7 @@ class AbstractiveSummarizer(Summarizer):
 
         self.model.train()
         optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
-        lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
+        # lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
         X, y = self.preprocess(X_raw, y_raw)
 
         best_model_paths = []
@@ -154,7 +161,7 @@ class AbstractiveSummarizer(Summarizer):
         self.model.load_state_dict(torch.load(best_model_paths[best_model_index]))
 
 
-    def preprocess(self, *args: List[str]):
+    def preprocess(self, *args: List[str], use_lower_case=False):
         """
         args: iterable of List of strings
         """
@@ -163,7 +170,7 @@ class AbstractiveSummarizer(Summarizer):
             tok = map(lambda x: self.tokeniser(x), X)
             # print("Tokenized", list(copy.deepcopy(tok)))
             
-            numericalized = [torch.tensor([self.word_index['<s>']] + [self.word_index.get(word, self.word_index['<unk>'] ) for word in sentence] + [self.word_index['<e>']], device=self.device)
+            numericalized = [torch.tensor([self.word_index['<s>']] + [self.word_index.get(word.lower() if use_lower_case else word, self.word_index['<unk>'] ) for word in sentence] + [self.word_index['<e>']], device=self.device)
                              for sentence in tqdm(tok, desc=f"Preprocessing arg {ind}")]
             # print("Numericalized size", len(numericalized))
             p_s = pad_sequence(numericalized, batch_first=True, padding_value=self.word_index['<pad>'])
@@ -238,8 +245,9 @@ class AbstractiveSummarizer(Summarizer):
         """
         tokens: list of token indices
         """
-        assert (start := self.word_index['<s>']) in tokens and (end := self.word_index['<e>']) in tokens
-        return [self.word_index[word] for word in tokens[tokens.index(start)+1:tokens.index(end)] if word not in self.specials]
+        # assert (start := self.word_index['<s>']) in tokens and (end := self.word_index['<e>']) in tokens
+        # return [self.word_index[word] for word in tokens[tokens.index(start)+1:tokens.index(end)] if word not in self.specials]
+        return [self.word_index[word] for word in tokens if word not in self.specials]
 
     def compute_validation_score(self, X, y):
         """
@@ -281,13 +289,9 @@ class AbstractiveSummarizer(Summarizer):
             rouge_1_f1 = r.get('rouge-1').get('f') # type: ignore
             return rouge_1_f1
         
-        
     def greedy_decode(self, src, src_mask, max_len, start_symbol):
         memory = self.model.encode(src, src_mask)
         ys = torch.zeros(1, 1, device=self.device).fill_(start_symbol).type_as(src.data)
-        ys = torch.cat(
-                [ys, torch.zeros(1, 1).type_as(src.data).fill_(random.randint(5,100))], dim=1
-            ) # remember TODO to undo this line
         for i in (pbar:=tqdm(range(max_len - 1), desc="Generating symbols", leave=False)):
             out = self.model.decode(
                 memory, src_mask, ys, self.subsequent_mask(ys.size(1)).type_as(src.data)
@@ -390,11 +394,14 @@ class AbstractiveSummarizer(Summarizer):
                 src.unsqueeze_(0)
                 max_len = src.size(-1) // 10
                 src_mask = torch.ones(1,1,src.size(-1)).to(self.device)
-                # y = self.nucleus_decode(src, src_mask, max_len, 2, 0.3)
-                # y = self.greedy_decode(src, src_mask, max_len, 2)
-                y = self.beam_search_decode(src, src_mask, max_len, 2, 10)
-                print(y)
-                y = self.decode(y.squeeze().tolist())
+                y_1 = self.nucleus_decode(src, src_mask, max_len, 2, 0.3)
+                print(y_1)
+                y_2 = self.greedy_decode(src, src_mask, max_len, 2)
+                print(y_2)
+                y_3 = self.beam_search_decode(src, src_mask, max_len, 2, 10)
+                print(y_3)
+                # print(y)
+                y = self.decode(y_1.squeeze().tolist()), self.decode(y_2.squeeze().tolist()), self.decode(y_3.squeeze().tolist())
                 print(y)
                 Y.append(y)
                 
