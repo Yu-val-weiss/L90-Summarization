@@ -25,10 +25,10 @@ with open(args.train_data, 'r') as f:
 with open(args.validation_data, 'r') as f:
     validation_data = json.load(f)
 
-train_articles = [article['article'] for article in train_data][:1024]
-train_summaries = [article['summary'] for article in train_data][:1024]
+train_articles = [article['article'] for article in train_data]
+train_summaries = [article['summary'] for article in train_data]
 
-model = AbstractiveSummarizer(num_vectors=10000, batch_size=2, num_epochs=2)
+model = AbstractiveSummarizer(num_vectors=10000, batch_size=8, num_epochs=20, grad_acc=32, use_device=False)
 
 val_articles = [article['article'] for article in validation_data]
 val_summaries = [article['summary'] for article in validation_data]
