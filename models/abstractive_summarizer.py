@@ -42,7 +42,9 @@ class AbstractiveSummarizer(Summarizer):
         if build_vocab:
             assert X is not None and y is not None
             vocab = self.build_vocab(X, y, max_size=num_vectors if num_vectors > 0 else None)
-            self.word_index = {k: v for v, k in enumerate(vocab.get_itos())} | vocab.get_stoi()
+            self.index_word = {k: v for k, v in enumerate(vocab.get_itos())}
+            self.word_index = vocab.get_stoi()
+            
             self.model =  self.model = Transformer(
                 len(vocab),
                 len(vocab),
@@ -52,13 +54,14 @@ class AbstractiveSummarizer(Summarizer):
                 heads=4,
                 pos_enc_max_len=10000
             )
+            
             self.num_classes = len(vocab)
             
             
             
         else:
-            self.word_index, self.emb_vectors = self._load_vectors(fname='models/glove.6B.100d.txt', first_line_is_n_d=False, dim=100,
-                                                                num_vectors=num_vectors, specials=self.specials, index_to_word=True) # index_to_word means dictionary also stores
+            self.word_index, self.index_word, self.emb_vectors = self._load_vectors(fname='models/glove.6B.100d.txt', first_line_is_n_d=False, dim=100,
+                                                                num_vectors=num_vectors, specials=self.specials) # index_to_word means dictionary also stores
                                                                                                                                                            # word, index pairs
 
             self.model = Transformer(
@@ -304,7 +307,7 @@ class AbstractiveSummarizer(Summarizer):
 
             x = self.model.generator(out)
             x = torch.argmax(x, dim=-1)
-            predicted_words = [[self.word_index[ind] for ind in sent] for sent in x.tolist()]
+            predicted_words = [[self.index_word[ind] for ind in sent] for sent in x.tolist()]
             predicted_words = [' '.join([word for word in sent[sent.index("<s>")+1 if "<s>" in sent else 0:sent.index("<e>") if '<e>' in sent else len(sent)] if word not in self.specials]) for sent in predicted_words]
             # for i in range(len(predicted_words)):
             #     print(f"Prediction {i}:\n", predicted_words[i])
@@ -396,7 +399,7 @@ class AbstractiveSummarizer(Summarizer):
             print("Sorted probs", sorted_probs.shape)
             cumulative_probs = torch.cumsum(sorted_probs, dim=-1) # need exp since log_softmax used by generator
             mask = cumulative_probs <= top_p
-            truncated_probs = torch.where(mask, sorted_probs, torch.tensor(0.0))
+            truncated_probs = torch.where(mask, sorted_probs, torch.tensor(0.0).to(self.device))
             truncated_probs = F.softmax(truncated_probs, dim=-1)
 
             sampled_index = torch.multinomial(truncated_probs, 1).item()
@@ -407,7 +410,7 @@ class AbstractiveSummarizer(Summarizer):
 
             next_word = next_word.item()
 
-            print(f"{next_word}: {self.word_index[next_word]}")
+            print(f"{next_word}: {self.index_word[int(next_word)]}")
             # pbar.write("Next word index: " + str(next_word))
             ys = torch.cat(
                 [ys, torch.zeros(1, 1).type_as(src.data).fill_(next_word)], dim=1
