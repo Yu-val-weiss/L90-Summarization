@@ -1,10 +1,13 @@
+import itertools
 import random
 from typing import List
+
+import torchtext
 
 from evaluation.rouge_evaluator import RougeEvaluator
 from tqdm import tqdm
 import torch
-from torch import Tensor, nn
+from torch import Tensor, device, nn
 from torch.nn.utils.rnn import pad_sequence
 import torch.nn.functional as F
 import numpy as np
@@ -14,64 +17,86 @@ from models.summarizer import Summarizer
 import nltk
 from nltk.tokenize import TreebankWordTokenizer
 from tabulate import tabulate
-    
+
 
 class AbstractiveSummarizer(Summarizer):
 
     # model = None
 
     def __init__(self, learning_rate=0.001, batch_size=32, grad_acc=1, num_epochs=10, keep_best_n_models=2,
-                 num_vectors=-1, use_device=True):
+                 num_vectors=-1, use_device=True, build_vocab=False, X=None, y=None):
         self.lr = learning_rate
         self.batch_size = batch_size
         self.grad_acc = grad_acc
         self.epochs = num_epochs
         self.keep_best_n = keep_best_n_models
-        
+
         nltk.download('punkt')
         self.tokeniser = TreebankWordTokenizer().tokenize
-        
+
         self.specials = ["<unk>","<pad>", "<s>", "<e>"]
         
-        self.word_index, self.emb_vectors = self._load_vectors(fname='models/glove.6B.100d.txt', first_line_is_n_d=False, dim=100,
-                                                               num_vectors=num_vectors, specials=self.specials, index_to_word=True) # index_to_word means dictionary also stores
-                                                                                                                                                           # word, index pairs
-       
-        self.model = Transformer(
-            len(self.emb_vectors),
-            len(self.emb_vectors),
-            N=4,
-            d_model=self.emb_vectors.shape[-1],
-            d_ff=self.emb_vectors.shape[-1]*4,
-            heads=4,
-            input_embeddings=self.emb_vectors,
-            freeze_in=False,
-            output_embeddings=self.emb_vectors,
-            freeze_out=False,
-            pos_enc_max_len=10000
-        ) 
+        self.word_index: dict = {}
+        self.num_classes = -1
         
+        if build_vocab:
+            assert X is not None and y is not None
+            vocab = self.build_vocab(X, y, max_size=num_vectors if num_vectors > 0 else None)
+            self.word_index = {k: v for v, k in enumerate(vocab.get_itos())} | vocab.get_stoi()
+            self.model =  self.model = Transformer(
+                len(vocab),
+                len(vocab),
+                N=4,
+                d_model=64,
+                d_ff=64*4,
+                heads=4,
+                pos_enc_max_len=10000
+            )
+            self.num_classes = len(vocab)
+            
+            
+            
+        else:
+            self.word_index, self.emb_vectors = self._load_vectors(fname='models/glove.6B.100d.txt', first_line_is_n_d=False, dim=100,
+                                                                num_vectors=num_vectors, specials=self.specials, index_to_word=True) # index_to_word means dictionary also stores
+                                                                                                                                                           # word, index pairs
+
+            self.model = Transformer(
+                len(self.emb_vectors),
+                len(self.emb_vectors),
+                N=4,
+                d_model=self.emb_vectors.shape[-1],
+                d_ff=self.emb_vectors.shape[-1]*4,
+                heads=4,
+                input_embeddings=self.emb_vectors,
+                freeze_in=False,
+                output_embeddings=self.emb_vectors,
+                freeze_out=False,
+                pos_enc_max_len=10000
+            )
+            self.num_classes = len(self.emb_vectors)
+
         self.mps = False
         self.cuda = False
-        
+
         self.device = torch.device("cpu")
-        
+
         if use_device:
             if torch.backends.mps.is_available():
                 self.mps = True
                 self.device = torch.device("mps")
                 self.model.float()
-                self.model.to(self.device)    
-            
+                self.model.to(self.device)
+
             elif torch.cuda.is_available():
                 self.mps = False
                 self.cuda = True
                 self.device = torch.device("cuda")
                 self.model.to(self.device)
-            
-        
+
+
         self.evaluator = RougeEvaluator()
-        
+
     def train(self, X_raw: List[str], y_raw: List[str], val_X, val_y, delete_models=False, load_model: str | None = None):
         """
         X: list of strings, each is an article
@@ -85,12 +110,12 @@ class AbstractiveSummarizer(Summarizer):
         """
 
         assert len(X_raw) == len(y_raw), "X and y must have the same length"
-        
+
         if load_model is not None:
             print(f"Loading model {load_model}...")
             self.model.load_state_dict(torch.load(load_model))
             return
-        
+
         if delete_models:
             dir = os.listdir()
             for item in dir:
@@ -112,7 +137,7 @@ class AbstractiveSummarizer(Summarizer):
             # Generate a list of indices and shuffle it
             indices = list(range(num_samples))
             random.shuffle(indices)
-            
+
             # Shuffle both by same indices
             X, y = X[indices], y[indices]
 
@@ -125,7 +150,7 @@ class AbstractiveSummarizer(Summarizer):
             # Train on each batch:
             for idx in tqdm(range(num_batches), desc="Training epoch {}".format(epoch + 1)):
                 # Compute the loss:
-                loss = self.compute_loss(X_batched[idx], y_batched[idx]) / self.grad_acc
+                loss = self.compute_loss(X_batched[idx].to(self.device), y_batched[idx].to(self.device)) / self.grad_acc
 
                 # Backprop:
                 loss.backward()
@@ -138,7 +163,7 @@ class AbstractiveSummarizer(Summarizer):
 
             # Evaluate the model:
             score = self.compute_validation_score(val_X, val_y)
-            
+
             # print(best_model_scores)
 
             # Save the model, if performance has improved (keeping n models saved)
@@ -151,7 +176,7 @@ class AbstractiveSummarizer(Summarizer):
                 # Delete the worst model:
                 if len(best_model_scores) > self.keep_best_n:
                     worst_model_index = np.argmin(best_model_scores)
-                    
+
                     os.remove(best_model_paths[worst_model_index])
                     del best_model_paths[worst_model_index]
                     del best_model_scores[worst_model_index]
@@ -169,65 +194,75 @@ class AbstractiveSummarizer(Summarizer):
             # print("Input to preprocessor:", X)
             tok = map(lambda x: self.tokeniser(x), X)
             # print("Tokenized", list(copy.deepcopy(tok)))
-            
-            numericalized = [torch.tensor([self.word_index['<s>']] + [self.word_index.get(word.lower() if use_lower_case else word, self.word_index['<unk>'] ) for word in sentence] + [self.word_index['<e>']], device=self.device)
+
+            numericalized = [torch.tensor([self.word_index['<s>']] + [self.word_index.get(word.lower() if use_lower_case else word, self.word_index['<unk>'] ) for word in sentence] + [self.word_index['<e>']])
                              for sentence in tqdm(tok, desc=f"Preprocessing arg {ind}")]
             # print("Numericalized size", len(numericalized))
             p_s = pad_sequence(numericalized, batch_first=True, padding_value=self.word_index['<pad>'])
             # print("Padded size", p_s.shape)
             return p_s
-            
+
         return tuple(_pr(X, ind) for ind, X in enumerate(args))
+
+
+    def build_vocab(self, *args: List[str], use_lower_case=False, max_size=None):
+        def _getwords(X: List[str]):
+            tok = map(lambda x: self.tokeniser(x), X)
+            return (word.lower() if use_lower_case else word for sentence in tqdm(tok, desc="tokenizing article", leave=False) for word in sentence)
+        vocab = torchtext.vocab.build_vocab_from_iterator(itertools.chain(_getwords(X) for X in tqdm(args, desc="Building vocab")), specials=self.specials, min_freq=2, max_tokens=max_size)
+        print("Vocab length:", len(vocab))
+        return vocab
+        
         
 
     def compute_loss(self, X_batch: Tensor, Y_batch: Tensor):
         """
         X_batch and y_batch have dimensions (batch_size, seq_length, d_model), each has diff seq_length
         """
-        
+
         # print("X batch size:", X_batch.shape)
         # print("y batch size:", Y_batch.shape)
-        
+
 
         criterion = nn.CrossEntropyLoss(label_smoothing=0.2)
-        
+
         pad_idx = self.word_index['<pad>']
-        
+
         # print("X device", X_batch.device)
         # print("Y device", Y_batch.device)
         # print("Pad idx:", pad_idx)
          # Source Mask
         src_mask = (X_batch != pad_idx).unsqueeze(1)
-        
+
         # print("Src mask device", src_mask.device)
-        
+
         # print("Loss src mask:", src_mask.shape)
         tgt_seq = Y_batch[:, :-1]
-        
+
         # print("tgt seq device", tgt_seq.device)
-        
+
         # Target Mask
         tgt_mask = (tgt_seq != pad_idx).unsqueeze(1)
         tgt_mask = tgt_mask & self.subsequent_mask(tgt_seq.size(-1), device=self.device)
-    
+
         predictions = self.model.forward(X_batch, tgt_seq, src_mask, tgt_mask)
-        
+
         # print(predictions)
-        
+
         # print("Predictions shape: ", predictions.shape)
         gen = self.model.generator(predictions)
         # print("Generator shape:", gen.shape)
-        
+
         # print(gen[0])
-        
-        # convert Y_batch to a 1-hot vector for each word 
-        y_one_hot = F.one_hot(Y_batch[:, 1:], num_classes=len(self.emb_vectors)).to(torch.float)
-        
+
+        # convert Y_batch to a 1-hot vector for each word
+        y_one_hot = F.one_hot(Y_batch[:, 1:], num_classes=self.num_classes).to(torch.float)
+
         # print("Y one hot shape:", y_one_hot.shape)
-        
+
         return criterion(gen, y_one_hot)
-        
-       
+
+
     @staticmethod
     def subsequent_mask(size, device=None):
         """
@@ -248,6 +283,7 @@ class AbstractiveSummarizer(Summarizer):
         # assert (start := self.word_index['<s>']) in tokens and (end := self.word_index['<e>']) in tokens
         # return [self.word_index[word] for word in tokens[tokens.index(start)+1:tokens.index(end)] if word not in self.specials]
         return [self.word_index[word] for word in tokens if word not in self.specials]
+    
 
     def compute_validation_score(self, X, y):
         """
@@ -258,13 +294,14 @@ class AbstractiveSummarizer(Summarizer):
         self.model.eval()
         with torch.no_grad():
             X_p, y_p = self.preprocess(X,y)
+            X_p, y_p = X_p.to(self.device), y_p.to(self.device)
             src_mask = (X_p != (pad := self.word_index['<pad>'])).unsqueeze(-2)
             tgt_mask = (y_p != pad).unsqueeze(-2)
             tgt_mask = tgt_mask & self.subsequent_mask(y_p.size(-1)).type_as(
                 tgt_mask.data
             )
             out = self.model.forward(X_p, y_p, src_mask, tgt_mask)
-            
+
             x = self.model.generator(out)
             x = torch.argmax(x, dim=-1)
             predicted_words = [[self.word_index[ind] for ind in sent] for sent in x.tolist()]
@@ -274,7 +311,7 @@ class AbstractiveSummarizer(Summarizer):
             #     print(f"Truth {i}:\n", y[i])
             # print(predicted_words)
             r = self.evaluator.batch_score(predicted_words, y)
-            
+
             # Convert the data to a list of tuples for tabulate
             table_data = [(key, value['r'], value['p'], value['f']) for key, value in r.items()] # type: ignore
 
@@ -283,12 +320,12 @@ class AbstractiveSummarizer(Summarizer):
 
             # Print the table
             table = tabulate(table_data, headers=headers, tablefmt='pretty')
-            
+
             print(table)
-            
+
             rouge_1_f1 = r.get('rouge-1').get('f') # type: ignore
             return rouge_1_f1
-        
+
     def greedy_decode(self, src, src_mask, max_len, start_symbol):
         memory = self.model.encode(src, src_mask)
         ys = torch.zeros(1, 1, device=self.device).fill_(start_symbol).type_as(src.data)
@@ -306,8 +343,8 @@ class AbstractiveSummarizer(Summarizer):
                 [ys, torch.zeros(1, 1).type_as(src.data).fill_(next_word)], dim=1
             )
         return ys
-    
-    
+
+
     def beam_search_decode(self, src, src_mask, max_len, start_symbol, beam_size):
         memory = self.model.encode(src, src_mask)
         ys = torch.ones(1, 1, device=self.device).fill_(start_symbol).type_as(src.data)
@@ -342,8 +379,8 @@ class AbstractiveSummarizer(Summarizer):
         # Return the best sequence
         best_sequence, _ = max(beams, key=lambda x: x[1])
         return best_sequence
-    
-    
+
+
     def nucleus_decode(self, src, src_mask, max_len, start_symbol, top_p: float):
         memory = self.model.encode(src, src_mask)
         ys = torch.zeros(1, 1, device=self.device).fill_(start_symbol).type_as(src.data)
@@ -352,7 +389,7 @@ class AbstractiveSummarizer(Summarizer):
                 memory, src_mask, ys, self.subsequent_mask(ys.size(1)).type_as(src.data)
             )
             prob = self.model.generator(out[:,-1], True)
-            
+
             # sample next word from top p distribution
             sorted_probs, sorted_indices = torch.sort(prob, descending=True, dim=-1)
             print("Sorted indices", sorted_indices.shape)
@@ -361,29 +398,29 @@ class AbstractiveSummarizer(Summarizer):
             mask = cumulative_probs <= top_p
             truncated_probs = torch.where(mask, sorted_probs, torch.tensor(0.0))
             truncated_probs = F.softmax(truncated_probs, dim=-1)
-            
+
             sampled_index = torch.multinomial(truncated_probs, 1).item()
-            
+
             print(sampled_index)
-            
+
             next_word = sorted_indices[:, int(sampled_index)]
-            
+
             next_word = next_word.item()
-            
+
             print(f"{next_word}: {self.word_index[next_word]}")
             # pbar.write("Next word index: " + str(next_word))
             ys = torch.cat(
                 [ys, torch.zeros(1, 1).type_as(src.data).fill_(next_word)], dim=1
             )
         return ys
-            
+
 
     def predict(self, X, k=40):
         """
         X: list of list of sentences (i.e., comprising an article)
         """
         Y = []
-        
+
         (X,) = self.preprocess(X)
         X = X.to(self.device)
         self.model.eval()
@@ -404,5 +441,5 @@ class AbstractiveSummarizer(Summarizer):
                 y = self.decode(y_1.squeeze().tolist()), self.decode(y_2.squeeze().tolist()), self.decode(y_3.squeeze().tolist())
                 print(y)
                 Y.append(y)
-                
+
         return Y
