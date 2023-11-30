@@ -7,7 +7,7 @@ import torchtext
 from evaluation.rouge_evaluator import RougeEvaluator
 from tqdm import tqdm
 import torch
-from torch import Tensor, device, nn
+from torch import Tensor, nn
 from torch.nn.utils.rnn import pad_sequence
 import torch.nn.functional as F
 import numpy as np
@@ -24,7 +24,7 @@ class AbstractiveSummarizer(Summarizer):
     # model = None
 
     def __init__(self, learning_rate=0.001, batch_size=32, grad_acc=1, num_epochs=10, keep_best_n_models=2,
-                 num_vectors=-1, use_device=True, build_vocab=False, X=None, y=None):
+                 vocab_size=-1, use_device=True, build_vocab=False, X=None, y=None):
         self.lr = learning_rate
         self.batch_size = batch_size
         self.grad_acc = grad_acc
@@ -36,12 +36,12 @@ class AbstractiveSummarizer(Summarizer):
 
         self.specials = ["<unk>","<pad>", "<s>", "<e>"]
         
-        self.word_index: dict = {}
+        self.word_index: dict[str,int] = {}
         self.num_classes = -1
         
         if build_vocab:
             assert X is not None and y is not None
-            vocab = self.build_vocab(X, y, max_size=num_vectors if num_vectors > 0 else None)
+            vocab = self.build_vocab(X, y, max_size=vocab_size if vocab_size > 0 else None)
             self.index_word = {k: v for k, v in enumerate(vocab.get_itos())}
             self.word_index = vocab.get_stoi()
             
@@ -61,7 +61,7 @@ class AbstractiveSummarizer(Summarizer):
             
         else:
             self.word_index, self.index_word, self.emb_vectors = self._load_vectors(fname='models/glove.6B.100d.txt', first_line_is_n_d=False, dim=100,
-                                                                num_vectors=num_vectors, specials=self.specials) # index_to_word means dictionary also stores
+                                                                num_vectors=vocab_size, specials=self.specials) # index_to_word means dictionary also stores
                                                                                                                                                            # word, index pairs
 
             self.model = Transformer(
@@ -285,7 +285,7 @@ class AbstractiveSummarizer(Summarizer):
         """
         # assert (start := self.word_index['<s>']) in tokens and (end := self.word_index['<e>']) in tokens
         # return [self.word_index[word] for word in tokens[tokens.index(start)+1:tokens.index(end)] if word not in self.specials]
-        return [self.word_index[word] for word in tokens if word not in self.specials]
+        return [self.index_word[word] for word in tokens if word not in self.specials]
     
 
     def compute_validation_score(self, X, y):
