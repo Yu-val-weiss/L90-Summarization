@@ -6,20 +6,20 @@ import numpy.typing as npt
 
 class Summarizer:
     @staticmethod
-    def _load_vectors(fname="models/wiki-news-300d-1M.vec", num_vectors=-1, specials: Collection[str] = [], index_to_word=False, first_line_is_n_d=True, dim=300) -> Tuple[Dict, npt.NDArray[np.float32]]:
+    def _load_vectors(fname="models/wiki-news-300d-1M.vec", num_vectors=-1, specials: Collection[str] = [], first_line_is_n_d=True, dim=300) -> Tuple[Dict[str, int], Dict[int,str], npt.NDArray[np.float32]]:
         with open(fname, 'r', encoding='utf-8', newline='\n', errors='ignore') as fin:
             if first_line_is_n_d:
                 n, d = map(int, fin.readline().split())
                 assert d == dim
-            word_index = {}
+            word_index: dict[str, int] = {}
+            index_word: dict[int, str] = {}
 
             vectors = []
             
             if (offset := len(specials)) > 0:
                 for ind, spec in enumerate(specials):
                     word_index[spec] = ind
-                    if index_to_word:
-                        word_index[ind] = spec
+                    index_word[ind] = spec
                     if spec.lower() == '<pad>':
                         vectors.append(np.zeros(dim))
                     else:
@@ -31,11 +31,10 @@ class Summarizer:
                     word = tokens[0]
                     vector = np.array(tokens[1:], dtype=float)  # Convert the list of values to a NumPy array
                     word_index[word] = index + offset
-                    if index_to_word:
-                        word_index[index + offset] = word
+                    index_word[index + offset] = word
                     vectors.append(vector)
                     pbar.update(1)
                     if num_vectors > -1 and pbar.n == num_vectors:
                         break
 
-        return word_index, np.array(vectors)
+        return word_index, index_word, np.array(vectors)
