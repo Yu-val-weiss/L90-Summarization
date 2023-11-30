@@ -164,6 +164,7 @@ models/wiki-*
 .DS_Store
 prediction_file.json
 *.pt
-abs_prediction_file.json
+*_prediction_file.json
 glove.*.txt
 *.bz2
+
