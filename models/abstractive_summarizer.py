@@ -395,8 +395,8 @@ class AbstractiveSummarizer(Summarizer):
 
             # sample next word from top p distribution
             sorted_probs, sorted_indices = torch.sort(prob, descending=True, dim=-1)
-            print("Sorted indices", sorted_indices.shape)
-            print("Sorted probs", sorted_probs.shape)
+            # print("Sorted indices", sorted_indices.shape)
+            # print("Sorted probs", sorted_probs.shape)
             cumulative_probs = torch.cumsum(sorted_probs, dim=-1) # need exp since log_softmax used by generator
             mask = cumulative_probs <= top_p
             truncated_probs = torch.where(mask, sorted_probs, torch.tensor(0.0).to(self.device))
@@ -404,13 +404,13 @@ class AbstractiveSummarizer(Summarizer):
 
             sampled_index = torch.multinomial(truncated_probs, 1).item()
 
-            print(sampled_index)
+            # print(sampled_index)
 
             next_word = sorted_indices[:, int(sampled_index)]
 
             next_word = next_word.item()
 
-            print(f"{next_word}: {self.index_word[int(next_word)]}")
+            # print(f"{next_word}: {self.index_word[int(next_word)]}")
             # pbar.write("Next word index: " + str(next_word))
             ys = torch.cat(
                 [ys, torch.zeros(1, 1).type_as(src.data).fill_(next_word)], dim=1
@@ -435,13 +435,17 @@ class AbstractiveSummarizer(Summarizer):
                 max_len = src.size(-1) // 10
                 src_mask = torch.ones(1,1,src.size(-1)).to(self.device)
                 y_1 = self.nucleus_decode(src, src_mask, max_len, 2, 0.3)
-                print(y_1)
+                # print(y_1)
                 y_2 = self.greedy_decode(src, src_mask, max_len, 2)
-                print(y_2)
+                # print(y_2)
                 y_3 = self.beam_search_decode(src, src_mask, max_len, 2, 10)
-                print(y_3)
+                # print(y_3)
                 # print(y)
-                y = self.decode(y_1.squeeze().tolist()), self.decode(y_2.squeeze().tolist()), self.decode(y_3.squeeze().tolist())
+                y = {
+                    "top_p": self.decode(y_1.squeeze().tolist()), 
+                    "greedy": self.decode(y_2.squeeze().tolist()),
+                    "beam": self.decode(y_3.squeeze().tolist())
+                }
                 print(y)
                 Y.append(y)
 
