@@ -48,11 +48,11 @@ class AbstractiveSummarizer(Summarizer):
             self.model =  self.model = Transformer(
                 len(vocab),
                 len(vocab),
-                N=4,
-                d_model=64,
-                d_ff=64*4,
-                heads=4,
-                pos_enc_max_len=10000
+                N=6,
+                d_model=128,
+                d_ff=128*4,
+                heads=8,
+                pos_enc_max_len=8192
             )
             
             self.num_classes = len(vocab)
@@ -173,7 +173,7 @@ class AbstractiveSummarizer(Summarizer):
             if len(best_model_scores) < self.keep_best_n or score > min(best_model_scores):
                 # Save the model:
                 best_model_scores.append(score)
-                best_model_paths.append(f"model-{epoch}_score-{score:.3f}.pt")
+                best_model_paths.append(f"model-{epoch+1}_score-{score:.3f}.pt")
                 torch.save(self.model.state_dict(), best_model_paths[-1])
 
                 # Delete the worst model:
@@ -227,7 +227,7 @@ class AbstractiveSummarizer(Summarizer):
         # print("y batch size:", Y_batch.shape)
 
 
-        criterion = nn.CrossEntropyLoss(label_smoothing=0.2)
+        criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 
         pad_idx = self.word_index['<pad>']
 
