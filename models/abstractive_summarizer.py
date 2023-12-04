@@ -23,7 +23,7 @@ class AbstractiveSummarizer(Summarizer):
 
     # model = None
 
-    def __init__(self, learning_rate=0.001, batch_size=32, grad_acc=1, num_epochs=10, keep_best_n_models=2,
+    def __init__(self, learning_rate=0.001, batch_size=32, grad_acc=1, num_epochs=10, keep_best_n_models=5,
                  vocab_size=-1, use_device=True, build_vocab=False, X=None, y=None):
         self.lr = learning_rate
         self.batch_size = batch_size
@@ -48,11 +48,12 @@ class AbstractiveSummarizer(Summarizer):
             self.model =  self.model = Transformer(
                 len(vocab),
                 len(vocab),
-                N=6,
-                d_model=128,
-                d_ff=128*4,
-                heads=8,
-                pos_enc_max_len=8192
+                N=4,
+                d_model=64,
+                d_ff=64*4,
+                heads=4,
+                pos_enc_max_len=8192,
+                same_embeddings=True
             )
             
             self.num_classes = len(vocab)

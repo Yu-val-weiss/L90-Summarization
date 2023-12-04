@@ -288,6 +288,7 @@ class OutputGenerator(nn.Module):
 class Transformer(nn.Module):
     def __init__(self, in_vocab_size: int, out_vocab_size: int,
                  N=8, d_model=512, d_ff=2048, heads=8, dropout=0.1, pos_enc_max_len=5000,# hyperparameter defaults from paper
+                 same_embeddings=False,
                  input_embeddings=None, freeze_in=True, 
                  output_embeddings=None, freeze_out=True):
         """Initializes internal Module state, shared by both nn.Module and ScriptModule.
@@ -302,6 +303,7 @@ class Transformer(nn.Module):
             dropout (float, optional): Probability of dropout. Defaults to 0.1.
             input_embeddings (NDArray[float32], optional): Numpy array of input embeddings to use. Defaults to None.
             freeze_in (bool, optional): Decides whether to continue learning on pretrained input embeddings. Defaults to True.
+            same_embeddings (bool, optional): Sets output embeddings to be identical (by reference) as input embeddings. Defaults to False.
             output_embeddings (NDArray[float32], optional): Numpy array of output embeddings to use. Defaults to None.
             freeze_out (bool, optional): Decides whether to continue learning on pretrained output embeddings. Defaults to True.
         """
@@ -317,10 +319,11 @@ class Transformer(nn.Module):
             TokEmbeddings(d_model, in_vocab_size, input_embeddings, freeze_in),
             copy.deepcopy(pos_enc)
         )
+        
         self.output_embeddings = nn.Sequential(
             TokEmbeddings(d_model, out_vocab_size, output_embeddings, freeze_out),
             copy.deepcopy(pos_enc)
-        )
+        ) if not same_embeddings else self.input_embeddings
         
         self.generator = OutputGenerator(d_model, out_vocab_size)
         
@@ -329,7 +332,7 @@ class Transformer(nn.Module):
             # skip initialisation of embeddings if using pretrained embeddings
             if n.startswith("input_embeddings") and input_embeddings is not None:
                 continue
-            if n.startswith("output_embeddings") and output_embeddings is not None:
+            if n.startswith("output_embeddings") and (output_embeddings is not None or (same_embeddings and input_embeddings is not None)):
                 continue
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
