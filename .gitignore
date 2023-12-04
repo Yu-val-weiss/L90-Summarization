@@ -167,4 +167,5 @@ prediction_file.json
 *_prediction_file.json
 glove.*.txt
 *.bz2
+*.bin
 

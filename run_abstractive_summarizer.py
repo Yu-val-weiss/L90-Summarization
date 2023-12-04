@@ -28,7 +28,7 @@ with open(args.validation_data, 'r') as f:
 train_articles = [article['article'] for article in train_data]
 train_summaries = [article['summary'] for article in train_data]
 
-model = AbstractiveSummarizer(vocab_size=10000, batch_size=1, num_epochs=20, grad_acc=128, use_device=True, build_vocab=True, X=train_articles, y = train_summaries)
+model = AbstractiveSummarizer(vocab_size=10000, batch_size=1, num_epochs=30, grad_acc=1, use_device=True, build_vocab=False, X=train_articles, y=train_summaries)
 
 val_articles = [article['article'] for article in validation_data]
 val_summaries = [article['summary'] for article in validation_data]

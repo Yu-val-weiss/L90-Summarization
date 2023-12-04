@@ -20,10 +20,11 @@ class Summarizer:
                 for ind, spec in enumerate(specials):
                     word_index[spec] = ind
                     index_word[ind] = spec
-                    if spec.lower() == '<pad>':
-                        vectors.append(np.zeros(dim))
-                    else:
-                        vectors.append(np.random.uniform(-0.2,0.2,size=dim))
+                    vectors.append(np.zeros(dim))
+                    # if spec.lower() == '<pad>':
+                    #     vectors.append(np.zeros(dim))
+                    # else:
+                    #     vectors.append(np.random.uniform(-0.2,0.2,size=dim))
 
             with tqdm(total=999994 if num_vectors == -1 else num_vectors, desc="Reading embedding vectors") as pbar:
                 for index, line in enumerate(fin):

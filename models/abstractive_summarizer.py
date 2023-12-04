@@ -18,12 +18,14 @@ import nltk
 from nltk.tokenize import TreebankWordTokenizer
 from tabulate import tabulate
 
+import fasttext
+
 
 class AbstractiveSummarizer(Summarizer):
 
     # model = None
 
-    def __init__(self, learning_rate=0.001, batch_size=32, grad_acc=1, num_epochs=10, keep_best_n_models=5,
+    def __init__(self, learning_rate=0.001, batch_size=32, grad_acc=1, num_epochs=10, keep_best_n_models=2,
                  vocab_size=-1, use_device=True, build_vocab=False, X=None, y=None):
         self.lr = learning_rate
         self.batch_size = batch_size
@@ -41,11 +43,12 @@ class AbstractiveSummarizer(Summarizer):
         
         if build_vocab:
             assert X is not None and y is not None
+            self.use_lower_case=False
             vocab = self.build_vocab(X, y, max_size=vocab_size if vocab_size > 0 else None)
             self.index_word = {k: v for k, v in enumerate(vocab.get_itos())}
             self.word_index = vocab.get_stoi()
             
-            self.model =  self.model = Transformer(
+            self.model = Transformer(
                 len(vocab),
                 len(vocab),
                 N=4,
@@ -61,24 +64,57 @@ class AbstractiveSummarizer(Summarizer):
             
             
         else:
-            self.word_index, self.index_word, self.emb_vectors = self._load_vectors(fname='models/glove.6B.100d.txt', first_line_is_n_d=False, dim=100,
-                                                                num_vectors=vocab_size, specials=self.specials) # index_to_word means dictionary also stores
-                                                                                                                                                           # word, index pairs
-
+            # self.word_index, self.index_word, self.emb_vectors = self._load_vectors(fname='models/glove.6B.100d.txt', first_line_is_n_d=False, dim=100,
+            #                                                     num_vectors=vocab_size, specials=self.specials) 
+                                                                                                 
+            # self.model = Transformer(
+            #     len(self.emb_vectors),
+            #     len(self.emb_vectors),
+            #     N=4,
+            #     d_model=self.emb_vectors.shape[-1],
+            #     d_ff=self.emb_vectors.shape[-1]*4,
+            #     heads=4,
+            #     input_embeddings=self.emb_vectors,
+            #     freeze_in=False,
+            #     same_embeddings=True,
+            #     pos_enc_max_len=10000
+            # )
+            # self.num_classes = len(self.emb_vectors)
+            assert X is not None and y is not None
+            self.use_lower_case=False
+            vocab = self.build_vocab(X, y, max_size=vocab_size if vocab_size > 0 else None)
+            self.index_word = {k: v for k, v in enumerate(vocab.get_itos())}
+            self.word_index = vocab.get_stoi()
+            
+            print("Loading fasttext model...")
+            
+            ft = fasttext.load_model('models/fasttext.64.bin')
+            
+            print("...model loaded")
+            
+            def _embed_word(index):
+                if self.index_word[index] in self.specials:
+                    return np.zeros(ft.get_dimension())
+                return ft.get_word_vector(self.index_word[index])
+            
+            print("Embedding words...")
+            embeddings = np.array([_embed_word(i) for i in range(len(vocab))])
+            print("... words embedded, shape: ", embeddings.shape)
+            
             self.model = Transformer(
-                len(self.emb_vectors),
-                len(self.emb_vectors),
+                len(vocab),
+                len(vocab),
                 N=4,
-                d_model=self.emb_vectors.shape[-1],
-                d_ff=self.emb_vectors.shape[-1]*4,
+                d_model=embeddings.shape[-1],
+                d_ff=embeddings.shape[-1]*4,
                 heads=4,
-                input_embeddings=self.emb_vectors,
-                freeze_in=False,
-                output_embeddings=self.emb_vectors,
-                freeze_out=False,
+                input_embeddings=embeddings,
+                freeze_in=True,
+                same_embeddings=True,
                 pos_enc_max_len=10000
             )
-            self.num_classes = len(self.emb_vectors)
+            self.num_classes = len(vocab)
+            
 
         self.mps = False
         self.cuda = False
@@ -129,7 +165,7 @@ class AbstractiveSummarizer(Summarizer):
         self.model.train()
         optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
         # lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
-        X, y = self.preprocess(X_raw, y_raw)
+        X, y = self.preprocess(X_raw, y_raw, use_lower_case=self.use_lower_case)
 
         best_model_paths = []
         best_model_scores = []
