@@ -1,4 +1,5 @@
 import argparse
+from typing import List
 from evaluation.rouge_evaluator import RougeEvaluator
 import json
 import tqdm
@@ -19,10 +20,22 @@ with open(args.pred_data, 'r') as f:
 
 assert len(eval_data) == len(pred_data)
 
+def clean_summary(summary: List[str]) -> str:
+    """Cleans up a summary
+
+    Args:
+        summary (List[str]): List of tokens
+    """
+    summary = [tok for tok in summary if tok not in ["<unk>", "<pad>"]]
+    if "<e>" in summary:
+        summary = summary[:summary.index("<e>")]
+    return " ".join(summary[1:]) # get rid of <s> at start
+    
+
 pred_sums = []
 eval_sums = []
 for eval, pred in tqdm.tqdm(zip(eval_data, pred_data), total=len(eval_data)):
-    pred_sums.append(pred['summary'])
+    pred_sums.append(clean_summary(pred['summary']))
     eval_sums.append(eval['summary'])
 
 scores = evaluator.batch_score(pred_sums, eval_sums)
