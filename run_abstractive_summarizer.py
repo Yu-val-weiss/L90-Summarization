@@ -28,19 +28,19 @@ with open(args.validation_data, 'r') as f:
 train_articles = [article['article'] for article in train_data]
 train_summaries = [article['summary'] for article in train_data]
 
-model = AbstractiveSummarizer(vocab_size=10000, batch_size=1, num_epochs=30, grad_acc=1, use_device=True, build_vocab=False, X=train_articles, y=train_summaries)
+model = AbstractiveSummarizer(vocab_size=10000, batch_size=4, num_epochs=20, grad_acc=32, use_device=True, build_vocab=False, X=train_articles, y=train_summaries)
 
 val_articles = [article['article'] for article in validation_data]
 val_summaries = [article['summary'] for article in validation_data]
 
-model.train(train_articles, train_summaries, val_articles, val_summaries, delete_models=True)
+model.train(train_articles, train_summaries, val_articles, val_summaries, load_model='trained_models/model-8_score-0.240.pt')
 
 with open(args.eval_data, 'r') as f:
     eval_data = json.load(f)
 
 eval_articles = [article['article'] for article in eval_data]
-summaries = model.predict(eval_articles)
-eval_out_data = [{'article': article, 'summary': summary} for article, summary in zip(eval_articles, summaries)]
+summaries = model.predict(eval_articles, beam_search=False, top_k=False, nucleus_decode=True)
+eval_out_data = [{'article': article, 'summary': summary["top_p"]} for article, summary in zip(eval_articles, summaries)]
 
-with open("abs_prediction_file.json", "w", encoding="utf-8") as f:
+with open("top_p_prediction_file.json", "w", encoding="utf-8") as f:
     json.dump(eval_out_data, fp=f, ensure_ascii=False, indent=4)
